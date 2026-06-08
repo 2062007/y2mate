@@ -5,6 +5,7 @@ import re
 import random
 import threading
 import uuid
+import json
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -26,15 +27,7 @@ CONCURRENT_FRAGMENTS = int(os.environ.get("CONCURRENT_FRAGMENTS", 10))
 app = Flask(__name__)
 
 # ============== Task Storage ==============
-_tasks = {}  # task_id -> {
-              #   'status': 'downloading'|'processing'|'completed'|'error',
-              #   'video_progress': 0,
-              #   'audio_progress': 0,
-              #   'merge_progress': 0,
-              #   'file': None,
-              #   'filename': None,
-              #   'error': None
-              # }
+_tasks = {}
 
 # ---------- HTML UI with 3 Progress Bars ----------
 INDEX_HTML = """
@@ -79,7 +72,6 @@ INDEX_HTML = """
 
       <!-- Progress Bars -->
       <div id="progressContainer" class="hidden space-y-3">
-        <!-- Video Progress -->
         <div>
           <div class="flex justify-between text-xs text-gray-400 mb-1">
             <span>📹 Tải video</span>
@@ -90,7 +82,6 @@ INDEX_HTML = """
           </div>
         </div>
         
-        <!-- Audio Progress -->
         <div>
           <div class="flex justify-between text-xs text-gray-400 mb-1">
             <span>🎵 Tải âm thanh</span>
@@ -101,7 +92,6 @@ INDEX_HTML = """
           </div>
         </div>
         
-        <!-- Merge Progress -->
         <div>
           <div class="flex justify-between text-xs text-gray-400 mb-1">
             <span>🔄 Ghép video & âm thanh</span>
@@ -152,7 +142,6 @@ INDEX_HTML = """
   const speedInfo = document.getElementById('speedInfo');
 
   let eventSource = null;
-  let taskId = null;
 
   btnDownload.onclick = async () => {
     const url = urlInput.value.trim();
@@ -161,7 +150,6 @@ INDEX_HTML = """
 
     if (!url) return alert('🔗 Paste URL đi bro');
 
-    // Reset UI
     status.textContent = '';
     linkbox.classList.add('hidden');
     progressContainer.classList.remove('hidden');
@@ -190,9 +178,8 @@ INDEX_HTML = """
       }
 
       const data = await response.json();
-      taskId = data.task_id;
+      const taskId = data.task_id;
 
-      // Connect to SSE
       eventSource = new EventSource(`/progress/${taskId}`);
       eventSource.onmessage = (e) => {
         const progress = JSON.parse(e.data);
@@ -277,13 +264,11 @@ class ProgressHook:
         
     def __call__(self, d):
         if d['status'] == 'downloading':
-            # Phân biệt video vs audio qua filename hoặc info_dict
             filename = d.get('filename', '')
             total = d.get('total_bytes') or d.get('total_bytes_estimate', 1)
             downloaded = d.get('downloaded_bytes', 0)
             percent = (downloaded / total) * 100 if total > 0 else 0
             
-            # Tốc độ
             speed = d.get('speed', 0)
             speed_str = ''
             if speed:
@@ -294,24 +279,28 @@ class ProgressHook:
                 else:
                     speed_str = f'{speed:.0f} B/s'
             
-            # Phân biệt video hay audio (thường audio có fxxx hoặc .m4a/.webm)
-            if 'audio' in filename.lower() or filename.endswith(('.m4a', '.webm', '.m4v')):
+            # Phân biệt video/audio dựa trên extension hoặc từ khóa
+            is_audio = any(x in filename.lower() for x in ['audio', '.m4a', '.webm', 'f140', 'f139', 'f251'])
+            
+            if is_audio:
                 _tasks[self.task_id]['audio_progress'] = percent
             else:
                 _tasks[self.task_id]['video_progress'] = percent
                 _tasks[self.task_id]['speed'] = speed_str
                 
         elif d['status'] == 'finished':
-            # Một phần đã tải xong
             filename = d.get('filename', '')
-            if 'audio' in filename.lower() or filename.endswith(('.m4a', '.webm', '.m4v')):
+            is_audio = any(x in filename.lower() for x in ['audio', '.m4a', '.webm', 'f140', 'f139', 'f251'])
+            
+            if is_audio:
                 _tasks[self.task_id]['audio_progress'] = 100
             else:
                 _tasks[self.task_id]['video_progress'] = 100
                 
-        elif d['status'] == 'processing' and 'merge' in str(d.get('info_dict', {})):
-            # Đang merge
-            _tasks[self.task_id]['merge_progress'] = d.get('progress', 0) * 100
+        elif d['status'] == 'processing':
+            # Đang merge hoặc xử lý
+            if 'merge' in str(d.get('info_dict', {})).lower():
+                _tasks[self.task_id]['merge_progress'] = min(100, _tasks[self.task_id].get('merge_progress', 0) + 20)
 
 # ============== Core local download (async) ==============
 def download_video_task(task_id: str, url: str, quality: str, iphone_compatible: bool):
@@ -347,10 +336,12 @@ def download_video_task(task_id: str, url: str, quality: str, iphone_compatible:
             _tasks[task_id]['status'] = 'completed'
             _tasks[task_id]['file'] = f"/file/{final_file.name}"
             _tasks[task_id]['filename'] = final_file.name
+            _tasks[task_id]['video_progress'] = 100
+            _tasks[task_id]['audio_progress'] = 100
             _tasks[task_id]['merge_progress'] = 100
             return
         
-        outtmpl = str(TMP_DIR / f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}_%(ext)s.%(ext)s")
+        outtmpl = str(TMP_DIR / f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}.%(ext)s")
         
         ydl_opts = {
             "outtmpl": outtmpl,
@@ -369,19 +360,8 @@ def download_video_task(task_id: str, url: str, quality: str, iphone_compatible:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # Tìm file đã tải
-        downloaded_files = list(TMP_DIR.glob(f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}_*"))
-        
-        # File cuối cùng sau merge
-        final_path = None
-        for f in downloaded_files:
-            if f.suffix == '.mp4' and not f.stem.endswith('.fmp4'):
-                final_path = f
-                break
-        
-        if final_path and final_path.exists():
-            # Rename về tên đẹp
-            final_path.rename(final_file)
+        # Kiểm tra file đã tải
+        if final_file.exists():
             _tasks[task_id]['status'] = 'completed'
             _tasks[task_id]['file'] = f"/file/{final_file.name}"
             _tasks[task_id]['filename'] = final_file.name
@@ -389,8 +369,20 @@ def download_video_task(task_id: str, url: str, quality: str, iphone_compatible:
             _tasks[task_id]['audio_progress'] = 100
             _tasks[task_id]['merge_progress'] = 100
         else:
-            _tasks[task_id]['status'] = 'error'
-            _tasks[task_id]['error'] = "File not found after download"
+            # Tìm file có pattern tương tự
+            pattern = f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}*.mp4"
+            matches = list(TMP_DIR.glob(pattern))
+            if matches:
+                matches[0].rename(final_file)
+                _tasks[task_id]['status'] = 'completed'
+                _tasks[task_id]['file'] = f"/file/{final_file.name}"
+                _tasks[task_id]['filename'] = final_file.name
+                _tasks[task_id]['video_progress'] = 100
+                _tasks[task_id]['audio_progress'] = 100
+                _tasks[task_id]['merge_progress'] = 100
+            else:
+                _tasks[task_id]['status'] = 'error'
+                _tasks[task_id]['error'] = "File not found after download"
             
     except Exception as e:
         _tasks[task_id]['status'] = 'error'
@@ -411,7 +403,30 @@ def download():
     if not url:
         return "No url", 400
     
-    # Tạo task ID
+    # Nếu có BACKENDS thì dispatch
+    if BACKENDS:
+        tried = []
+        for attempt in range(len(BACKENDS)):
+            backend = choose_backend()
+            if backend in tried:
+                continue
+            tried.append(backend)
+            try:
+                resp = requests.post(
+                    f"{backend.rstrip('/')}/download",
+                    json={"url": url, "quality": quality, "iphone_compatible": iphone_compatible},
+                    timeout=300,
+                )
+                if resp.status_code == 200:
+                    try:
+                        return jsonify(resp.json())
+                    except Exception:
+                        return resp.text, resp.status_code
+            except Exception:
+                continue
+        return "All backends failed", 502
+    
+    # Local download với task tracking
     task_id = str(uuid.uuid4())
     _tasks[task_id] = {
         'status': 'pending',
@@ -424,7 +439,6 @@ def download():
         'error': None
     }
     
-    # Chạy task trong thread riêng
     thread = threading.Thread(target=download_video_task, args=(task_id, url, quality, iphone_compatible))
     thread.daemon = True
     thread.start()
@@ -433,7 +447,7 @@ def download():
 
 @app.route("/progress/<task_id>")
 def progress_stream(task_id):
-    """SSE endpoint cho progress"""
+    """SSE endpoint cho progress - dùng json.dumps thay vì jsonify để tránh lỗi context"""
     def generate():
         last_progress = {}
         while True:
@@ -452,16 +466,15 @@ def progress_stream(task_id):
             if task.get('status') == 'completed':
                 progress_data['file'] = task.get('file')
                 progress_data['filename'] = task.get('filename')
-                yield f"data: {jsonify(progress_data).get_data(as_text=True)}\n\n"
+                yield f"data: {json.dumps(progress_data)}\n\n"
                 break
             elif task.get('status') == 'error':
                 progress_data['error'] = task.get('error')
-                yield f"data: {jsonify(progress_data).get_data(as_text=True)}\n\n"
+                yield f"data: {json.dumps(progress_data)}\n\n"
                 break
             
-            # Chỉ gửi khi có thay đổi
             if progress_data != last_progress:
-                yield f"data: {jsonify(progress_data).get_data(as_text=True)}\n\n"
+                yield f"data: {json.dumps(progress_data)}\n\n"
                 last_progress = progress_data.copy()
             
             time.sleep(0.5)
