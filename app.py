@@ -12,6 +12,7 @@ from typing import Optional, Tuple
 import requests
 from flask import Flask, request, jsonify, render_template_string, send_file, abort, Response
 import yt_dlp
+from bs4 import BeautifulSoup
 
 # ============== CONFIG ==============
 BASE_TMP = Path(os.environ.get("TMPDIR", "/tmp"))
@@ -257,38 +258,57 @@ def background_cleaner():
 
 threading.Thread(target=background_cleaner, daemon=True).start()
 
-# ============== Copyright Checker ==============
-def check_copyright(url: str) -> Tuple[bool, str, Optional[dict]]:
+# ============== Check Download Button ==============
+def has_download_button(url: str) -> Tuple[bool, str, Optional[dict]]:
     """
-    Kiểm tra bản quyền video.
-    Returns: (allowed, message, info_dict)
-    allowed = True nếu video được phép tải (Creative Commons)
+    Kiểm tra video có nút tải xuống chính thức từ YouTube không
+    Bằng cách lấy HTML và tìm button "download"
     """
     try:
-        cmd = [
-            'yt-dlp', '--skip-download', '--print-json',
-            '--no-warnings', '--quiet', url
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            return False, "Không thể lấy thông tin video.", None
+        # Lấy thông tin video bằng yt-dlp trước
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            title = info.get("title", "video")
         
-        info = json.loads(result.stdout)
-        license_type = info.get('license', 'standard')
-        availability = info.get('availability', 'public')
-        title = info.get('title', 'Unknown')
+        # Tạo headers giống trình duyệt
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
         
-        # Chỉ cho phép video có license Creative Commons
-        if license_type == 'Creative Commons Attribution':
-            return True, "Video Creative Commons - được phép tải.", info
-        else:
-            # Tất cả các video khác (standard, premium, ...) đều bị từ chối
-            return False, f"Video '{title}' có bản quyền tiêu chuẩn, không được phép tải xuống.", info
+        # Lấy HTML của trang video
+        response = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Tìm nút tải xuống
+        # Cách 1: Tìm button có text "Download"
+        download_btn = soup.find('button', {'aria-label': re.compile(r'Download', re.I)})
+        if download_btn:
+            return True, "✅ Video có nút tải xuống chính thức từ YouTube.", info
+        
+        # Cách 2: Tìm trong các menu items
+        menu_items = soup.find_all('ytd-menu-service-item-renderer')
+        for item in menu_items:
+            if 'Download' in str(item):
+                return True, "✅ Video có nút tải xuống chính thức.", info
+        
+        # Cách 3: Kiểm tra qua yt-dlp xem có format "youtube.com/get_video_info" không
+        # Nếu video có nút tải, thường có format đặc biệt
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+            info_check = ydl.extract_info(url, download=False)
+            # Kiểm tra xem có format dành cho download không
+            formats = info_check.get('formats', [])
+            has_drm = any(f.get('has_drm', False) for f in formats)
             
-    except subprocess.TimeoutExpired:
-        return False, "Kiểm tra bản quyền timeout.", None
-    except json.JSONDecodeError:
-        return False, "Lỗi đọc dữ liệu video.", None
+            # Video có bảo vệ DRM thường không có nút tải
+            if has_drm:
+                return False, f"⚠️ Video '{title}' có bảo vệ bản quyền (DRM), không có nút tải chính thức.", info
+        
+        # Nếu không tìm thấy nút tải
+        return False, f"⚠️ Video '{title}' không có nút tải xuống chính thức. Hãy đảm bảo bạn có quyền tải video này.", info
+        
+    except requests.RequestException as e:
+        return False, f"Lỗi kết nối: {str(e)}", None
     except Exception as e:
         return False, f"Lỗi: {str(e)}", None
 
@@ -339,7 +359,7 @@ class ProgressHook:
 
 # ============== Core local download (async) ==============
 def download_video_task(task_id: str, url: str, quality: str, iphone_compatible: bool):
-    """Chạy trong thread riêng (chỉ gọi khi đã qua kiểm tra copyright)"""
+    """Chạy trong thread riêng"""
     try:
         format_map = {
             "360p": ("bestvideo[height<=360]", "bestaudio"),
@@ -430,18 +450,17 @@ def index():
 
 @app.route("/check", methods=["POST"])
 def check_video():
-    """Endpoint kiểm tra bản quyền trước khi tải (có thể gọi riêng)"""
+    """Endpoint kiểm tra nút tải xuống"""
     data = request.get_json() or {}
     url = (data.get("url") or "").strip()
     if not url:
         return jsonify({"error": "Missing url"}), 400
     
-    allowed, message, info = check_copyright(url)
+    has_btn, message, info = has_download_button(url)
     return jsonify({
-        "allowed": allowed,
+        "has_download_button": has_btn,
         "message": message,
-        "title": info.get("title") if info else None,
-        "license": info.get("license") if info else None
+        "title": info.get("title") if info else None
     })
 
 @app.route("/download", methods=["POST"])
@@ -454,10 +473,10 @@ def download():
     if not url:
         return "No url", 400
     
-    # 🔒 KIỂM TRA BẢN QUYỀN TRƯỚC KHI LÀM BẤT CỨ ĐIỀU GÌ
-    allowed, copyright_msg, _ = check_copyright(url)
-    if not allowed:
-        return copyright_msg, 403  # 403 Forbidden
+    # 🔍 KIỂM TRA NÚT TẢI XUỐNG TRƯỚC KHI TẢI
+    has_btn, check_msg, _ = has_download_button(url)
+    if not has_btn:
+        return check_msg, 403  # 403 Forbidden - không có nút tải chính thức
     
     # Nếu có BACKENDS thì dispatch
     if BACKENDS:
@@ -482,7 +501,7 @@ def download():
                 continue
         return "All backends failed", 502
     
-    # Local download với task tracking (chỉ khi đã qua kiểm tra)
+    # Local download với task tracking
     task_id = str(uuid.uuid4())
     _tasks[task_id] = {
         'status': 'pending',
@@ -503,7 +522,7 @@ def download():
 
 @app.route("/progress/<task_id>")
 def progress_stream(task_id):
-    """SSE endpoint cho progress - dùng json.dumps thay vì jsonify để tránh lỗi context"""
+    """SSE endpoint cho progress"""
     def generate():
         last_progress = {}
         while True:
@@ -546,6 +565,6 @@ def serve_file(filename):
 
 # ============== Run ==============
 if __name__ == "__main__":
-    import subprocess  # thêm import này để tránh lỗi NameError
+    import subprocess
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
