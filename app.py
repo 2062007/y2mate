@@ -14,9 +14,14 @@ from flask import Flask, request, jsonify, render_template_string, send_file, ab
 import yt_dlp
 
 # ============== CONFIG ==============
-BASE_TMP = Path(os.environ.get("TMPDIR", "/tmp"))
-TMP_DIR = BASE_TMP / "mini_y2mate_tmp"
+# Lấy thư mục hiện tại (nơi chứa app.py)
+CURRENT_DIR = Path(__file__).parent
+
+# Tạo thư mục download (cạnh file app.py)
+TMP_DIR = CURRENT_DIR / "download"
 TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+print(f"📁 Thư mục lưu file tạm: {TMP_DIR}")
 
 BACKENDS = [b.strip() for b in os.environ.get("BACKENDS", "").split(",") if b.strip()]
 DISPATCH_STRATEGY = os.environ.get("DISPATCH_STRATEGY", "roundrobin")
@@ -245,14 +250,19 @@ def choose_backend() -> Optional[str]:
 
 # ============== Cleaner Thread ==============
 def background_cleaner():
+    """Dọn dẹp file cũ trong thư mục download"""
     while True:
         now = time.time()
-        for p in list(TMP_DIR.iterdir()):
-            try:
-                if p.is_file() and now - p.stat().st_mtime > FILE_TTL:
-                    p.unlink()
-            except Exception:
-                pass
+        try:
+            for p in list(TMP_DIR.iterdir()):
+                try:
+                    if p.is_file() and now - p.stat().st_mtime > FILE_TTL:
+                        p.unlink()
+                        print(f"🗑️ Đã xóa file cũ: {p.name}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
         time.sleep(30)
 
 threading.Thread(target=background_cleaner, daemon=True).start()
@@ -491,4 +501,7 @@ def serve_file(filename):
 # ============== Run ==============
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    print(f"🚀 Server chạy tại: http://localhost:{port}")
+    print(f"📁 File tải về sẽ lưu tạm trong: {TMP_DIR}")
+    print(f"⏱️ File tự động xóa sau: {FILE_TTL} giây")
     app.run(host="0.0.0.0", port=port, debug=False)
