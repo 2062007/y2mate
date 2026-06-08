@@ -5,14 +5,12 @@ import re
 import random
 import threading
 import uuid
-import json
 from pathlib import Path
 from typing import Optional, Tuple
 
 import requests
 from flask import Flask, request, jsonify, render_template_string, send_file, abort, Response
 import yt_dlp
-from bs4 import BeautifulSoup
 
 # ============== CONFIG ==============
 BASE_TMP = Path(os.environ.get("TMPDIR", "/tmp"))
@@ -28,7 +26,15 @@ CONCURRENT_FRAGMENTS = int(os.environ.get("CONCURRENT_FRAGMENTS", 10))
 app = Flask(__name__)
 
 # ============== Task Storage ==============
-_tasks = {}
+_tasks = {}  # task_id -> {
+              #   'status': 'downloading'|'processing'|'completed'|'error',
+              #   'video_progress': 0,
+              #   'audio_progress': 0,
+              #   'merge_progress': 0,
+              #   'file': None,
+              #   'filename': None,
+              #   'error': None
+              # }
 
 # ---------- HTML UI with 3 Progress Bars ----------
 INDEX_HTML = """
@@ -73,6 +79,7 @@ INDEX_HTML = """
 
       <!-- Progress Bars -->
       <div id="progressContainer" class="hidden space-y-3">
+        <!-- Video Progress -->
         <div>
           <div class="flex justify-between text-xs text-gray-400 mb-1">
             <span>📹 Tải video</span>
@@ -83,6 +90,7 @@ INDEX_HTML = """
           </div>
         </div>
         
+        <!-- Audio Progress -->
         <div>
           <div class="flex justify-between text-xs text-gray-400 mb-1">
             <span>🎵 Tải âm thanh</span>
@@ -93,6 +101,7 @@ INDEX_HTML = """
           </div>
         </div>
         
+        <!-- Merge Progress -->
         <div>
           <div class="flex justify-between text-xs text-gray-400 mb-1">
             <span>🔄 Ghép video & âm thanh</span>
@@ -143,6 +152,7 @@ INDEX_HTML = """
   const speedInfo = document.getElementById('speedInfo');
 
   let eventSource = null;
+  let taskId = null;
 
   btnDownload.onclick = async () => {
     const url = urlInput.value.trim();
@@ -151,6 +161,7 @@ INDEX_HTML = """
 
     if (!url) return alert('🔗 Paste URL đi bro');
 
+    // Reset UI
     status.textContent = '';
     linkbox.classList.add('hidden');
     progressContainer.classList.remove('hidden');
@@ -179,8 +190,9 @@ INDEX_HTML = """
       }
 
       const data = await response.json();
-      const taskId = data.task_id;
+      taskId = data.task_id;
 
+      // Connect to SSE
       eventSource = new EventSource(`/progress/${taskId}`);
       eventSource.onmessage = (e) => {
         const progress = JSON.parse(e.data);
@@ -258,60 +270,6 @@ def background_cleaner():
 
 threading.Thread(target=background_cleaner, daemon=True).start()
 
-# ============== Check Download Button ==============
-def has_download_button(url: str) -> Tuple[bool, str, Optional[dict]]:
-    """
-    Kiểm tra video có nút tải xuống chính thức từ YouTube không
-    Bằng cách lấy HTML và tìm button "download"
-    """
-    try:
-        # Lấy thông tin video bằng yt-dlp trước
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get("title", "video")
-        
-        # Tạo headers giống trình duyệt
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-        
-        # Lấy HTML của trang video
-        response = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Tìm nút tải xuống
-        # Cách 1: Tìm button có text "Download"
-        download_btn = soup.find('button', {'aria-label': re.compile(r'Download', re.I)})
-        if download_btn:
-            return True, "✅ Video có nút tải xuống chính thức từ YouTube.", info
-        
-        # Cách 2: Tìm trong các menu items
-        menu_items = soup.find_all('ytd-menu-service-item-renderer')
-        for item in menu_items:
-            if 'Download' in str(item):
-                return True, "✅ Video có nút tải xuống chính thức.", info
-        
-        # Cách 3: Kiểm tra qua yt-dlp xem có format "youtube.com/get_video_info" không
-        # Nếu video có nút tải, thường có format đặc biệt
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
-            info_check = ydl.extract_info(url, download=False)
-            # Kiểm tra xem có format dành cho download không
-            formats = info_check.get('formats', [])
-            has_drm = any(f.get('has_drm', False) for f in formats)
-            
-            # Video có bảo vệ DRM thường không có nút tải
-            if has_drm:
-                return False, f"⚠️ Video '{title}' có bảo vệ bản quyền (DRM), không có nút tải chính thức.", info
-        
-        # Nếu không tìm thấy nút tải
-        return False, f"⚠️ Video '{title}' không có nút tải xuống chính thức. Hãy đảm bảo bạn có quyền tải video này.", info
-        
-    except requests.RequestException as e:
-        return False, f"Lỗi kết nối: {str(e)}", None
-    except Exception as e:
-        return False, f"Lỗi: {str(e)}", None
-
 # ============== Progress Hook for yt-dlp ==============
 class ProgressHook:
     def __init__(self, task_id):
@@ -319,11 +277,13 @@ class ProgressHook:
         
     def __call__(self, d):
         if d['status'] == 'downloading':
+            # Phân biệt video vs audio qua filename hoặc info_dict
             filename = d.get('filename', '')
             total = d.get('total_bytes') or d.get('total_bytes_estimate', 1)
             downloaded = d.get('downloaded_bytes', 0)
             percent = (downloaded / total) * 100 if total > 0 else 0
             
+            # Tốc độ
             speed = d.get('speed', 0)
             speed_str = ''
             if speed:
@@ -334,28 +294,24 @@ class ProgressHook:
                 else:
                     speed_str = f'{speed:.0f} B/s'
             
-            # Phân biệt video/audio dựa trên extension hoặc từ khóa
-            is_audio = any(x in filename.lower() for x in ['audio', '.m4a', '.webm', 'f140', 'f139', 'f251'])
-            
-            if is_audio:
+            # Phân biệt video hay audio (thường audio có fxxx hoặc .m4a/.webm)
+            if 'audio' in filename.lower() or filename.endswith(('.m4a', '.webm', '.m4v')):
                 _tasks[self.task_id]['audio_progress'] = percent
             else:
                 _tasks[self.task_id]['video_progress'] = percent
                 _tasks[self.task_id]['speed'] = speed_str
                 
         elif d['status'] == 'finished':
+            # Một phần đã tải xong
             filename = d.get('filename', '')
-            is_audio = any(x in filename.lower() for x in ['audio', '.m4a', '.webm', 'f140', 'f139', 'f251'])
-            
-            if is_audio:
+            if 'audio' in filename.lower() or filename.endswith(('.m4a', '.webm', '.m4v')):
                 _tasks[self.task_id]['audio_progress'] = 100
             else:
                 _tasks[self.task_id]['video_progress'] = 100
                 
-        elif d['status'] == 'processing':
-            # Đang merge hoặc xử lý
-            if 'merge' in str(d.get('info_dict', {})).lower():
-                _tasks[self.task_id]['merge_progress'] = min(100, _tasks[self.task_id].get('merge_progress', 0) + 20)
+        elif d['status'] == 'processing' and 'merge' in str(d.get('info_dict', {})):
+            # Đang merge
+            _tasks[self.task_id]['merge_progress'] = d.get('progress', 0) * 100
 
 # ============== Core local download (async) ==============
 def download_video_task(task_id: str, url: str, quality: str, iphone_compatible: bool):
@@ -391,12 +347,10 @@ def download_video_task(task_id: str, url: str, quality: str, iphone_compatible:
             _tasks[task_id]['status'] = 'completed'
             _tasks[task_id]['file'] = f"/file/{final_file.name}"
             _tasks[task_id]['filename'] = final_file.name
-            _tasks[task_id]['video_progress'] = 100
-            _tasks[task_id]['audio_progress'] = 100
             _tasks[task_id]['merge_progress'] = 100
             return
         
-        outtmpl = str(TMP_DIR / f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}.%(ext)s")
+        outtmpl = str(TMP_DIR / f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}_%(ext)s.%(ext)s")
         
         ydl_opts = {
             "outtmpl": outtmpl,
@@ -415,8 +369,19 @@ def download_video_task(task_id: str, url: str, quality: str, iphone_compatible:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # Kiểm tra file đã tải
-        if final_file.exists():
+        # Tìm file đã tải
+        downloaded_files = list(TMP_DIR.glob(f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}_*"))
+        
+        # File cuối cùng sau merge
+        final_path = None
+        for f in downloaded_files:
+            if f.suffix == '.mp4' and not f.stem.endswith('.fmp4'):
+                final_path = f
+                break
+        
+        if final_path and final_path.exists():
+            # Rename về tên đẹp
+            final_path.rename(final_file)
             _tasks[task_id]['status'] = 'completed'
             _tasks[task_id]['file'] = f"/file/{final_file.name}"
             _tasks[task_id]['filename'] = final_file.name
@@ -424,20 +389,8 @@ def download_video_task(task_id: str, url: str, quality: str, iphone_compatible:
             _tasks[task_id]['audio_progress'] = 100
             _tasks[task_id]['merge_progress'] = 100
         else:
-            # Tìm file có pattern tương tự
-            pattern = f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}*.mp4"
-            matches = list(TMP_DIR.glob(pattern))
-            if matches:
-                matches[0].rename(final_file)
-                _tasks[task_id]['status'] = 'completed'
-                _tasks[task_id]['file'] = f"/file/{final_file.name}"
-                _tasks[task_id]['filename'] = final_file.name
-                _tasks[task_id]['video_progress'] = 100
-                _tasks[task_id]['audio_progress'] = 100
-                _tasks[task_id]['merge_progress'] = 100
-            else:
-                _tasks[task_id]['status'] = 'error'
-                _tasks[task_id]['error'] = "File not found after download"
+            _tasks[task_id]['status'] = 'error'
+            _tasks[task_id]['error'] = "File not found after download"
             
     except Exception as e:
         _tasks[task_id]['status'] = 'error'
@@ -447,21 +400,6 @@ def download_video_task(task_id: str, url: str, quality: str, iphone_compatible:
 @app.route("/", methods=["GET"])
 def index():
     return render_template_string(INDEX_HTML)
-
-@app.route("/check", methods=["POST"])
-def check_video():
-    """Endpoint kiểm tra nút tải xuống"""
-    data = request.get_json() or {}
-    url = (data.get("url") or "").strip()
-    if not url:
-        return jsonify({"error": "Missing url"}), 400
-    
-    has_btn, message, info = has_download_button(url)
-    return jsonify({
-        "has_download_button": has_btn,
-        "message": message,
-        "title": info.get("title") if info else None
-    })
 
 @app.route("/download", methods=["POST"])
 def download():
@@ -473,35 +411,7 @@ def download():
     if not url:
         return "No url", 400
     
-    # 🔍 KIỂM TRA NÚT TẢI XUỐNG TRƯỚC KHI TẢI
-    has_btn, check_msg, _ = has_download_button(url)
-    if not has_btn:
-        return check_msg, 403  # 403 Forbidden - không có nút tải chính thức
-    
-    # Nếu có BACKENDS thì dispatch
-    if BACKENDS:
-        tried = []
-        for attempt in range(len(BACKENDS)):
-            backend = choose_backend()
-            if backend in tried:
-                continue
-            tried.append(backend)
-            try:
-                resp = requests.post(
-                    f"{backend.rstrip('/')}/download",
-                    json={"url": url, "quality": quality, "iphone_compatible": iphone_compatible},
-                    timeout=300,
-                )
-                if resp.status_code == 200:
-                    try:
-                        return jsonify(resp.json())
-                    except Exception:
-                        return resp.text, resp.status_code
-            except Exception:
-                continue
-        return "All backends failed", 502
-    
-    # Local download với task tracking
+    # Tạo task ID
     task_id = str(uuid.uuid4())
     _tasks[task_id] = {
         'status': 'pending',
@@ -514,6 +424,7 @@ def download():
         'error': None
     }
     
+    # Chạy task trong thread riêng
     thread = threading.Thread(target=download_video_task, args=(task_id, url, quality, iphone_compatible))
     thread.daemon = True
     thread.start()
@@ -541,15 +452,16 @@ def progress_stream(task_id):
             if task.get('status') == 'completed':
                 progress_data['file'] = task.get('file')
                 progress_data['filename'] = task.get('filename')
-                yield f"data: {json.dumps(progress_data)}\n\n"
+                yield f"data: {jsonify(progress_data).get_data(as_text=True)}\n\n"
                 break
             elif task.get('status') == 'error':
                 progress_data['error'] = task.get('error')
-                yield f"data: {json.dumps(progress_data)}\n\n"
+                yield f"data: {jsonify(progress_data).get_data(as_text=True)}\n\n"
                 break
             
+            # Chỉ gửi khi có thay đổi
             if progress_data != last_progress:
-                yield f"data: {json.dumps(progress_data)}\n\n"
+                yield f"data: {jsonify(progress_data).get_data(as_text=True)}\n\n"
                 last_progress = progress_data.copy()
             
             time.sleep(0.5)
@@ -565,6 +477,5 @@ def serve_file(filename):
 
 # ============== Run ==============
 if __name__ == "__main__":
-    import subprocess
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
