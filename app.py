@@ -257,6 +257,41 @@ def background_cleaner():
 
 threading.Thread(target=background_cleaner, daemon=True).start()
 
+# ============== Copyright Checker ==============
+def check_copyright(url: str) -> Tuple[bool, str, Optional[dict]]:
+    """
+    Kiểm tra bản quyền video.
+    Returns: (allowed, message, info_dict)
+    allowed = True nếu video được phép tải (Creative Commons)
+    """
+    try:
+        cmd = [
+            'yt-dlp', '--skip-download', '--print-json',
+            '--no-warnings', '--quiet', url
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return False, "Không thể lấy thông tin video.", None
+        
+        info = json.loads(result.stdout)
+        license_type = info.get('license', 'standard')
+        availability = info.get('availability', 'public')
+        title = info.get('title', 'Unknown')
+        
+        # Chỉ cho phép video có license Creative Commons
+        if license_type == 'Creative Commons Attribution':
+            return True, "Video Creative Commons - được phép tải.", info
+        else:
+            # Tất cả các video khác (standard, premium, ...) đều bị từ chối
+            return False, f"Video '{title}' có bản quyền tiêu chuẩn, không được phép tải xuống.", info
+            
+    except subprocess.TimeoutExpired:
+        return False, "Kiểm tra bản quyền timeout.", None
+    except json.JSONDecodeError:
+        return False, "Lỗi đọc dữ liệu video.", None
+    except Exception as e:
+        return False, f"Lỗi: {str(e)}", None
+
 # ============== Progress Hook for yt-dlp ==============
 class ProgressHook:
     def __init__(self, task_id):
@@ -304,7 +339,7 @@ class ProgressHook:
 
 # ============== Core local download (async) ==============
 def download_video_task(task_id: str, url: str, quality: str, iphone_compatible: bool):
-    """Chạy trong thread riêng"""
+    """Chạy trong thread riêng (chỉ gọi khi đã qua kiểm tra copyright)"""
     try:
         format_map = {
             "360p": ("bestvideo[height<=360]", "bestaudio"),
@@ -393,6 +428,22 @@ def download_video_task(task_id: str, url: str, quality: str, iphone_compatible:
 def index():
     return render_template_string(INDEX_HTML)
 
+@app.route("/check", methods=["POST"])
+def check_video():
+    """Endpoint kiểm tra bản quyền trước khi tải (có thể gọi riêng)"""
+    data = request.get_json() or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "Missing url"}), 400
+    
+    allowed, message, info = check_copyright(url)
+    return jsonify({
+        "allowed": allowed,
+        "message": message,
+        "title": info.get("title") if info else None,
+        "license": info.get("license") if info else None
+    })
+
 @app.route("/download", methods=["POST"])
 def download():
     data = request.get_json() or {}
@@ -402,6 +453,11 @@ def download():
     
     if not url:
         return "No url", 400
+    
+    # 🔒 KIỂM TRA BẢN QUYỀN TRƯỚC KHI LÀM BẤT CỨ ĐIỀU GÌ
+    allowed, copyright_msg, _ = check_copyright(url)
+    if not allowed:
+        return copyright_msg, 403  # 403 Forbidden
     
     # Nếu có BACKENDS thì dispatch
     if BACKENDS:
@@ -426,7 +482,7 @@ def download():
                 continue
         return "All backends failed", 502
     
-    # Local download với task tracking
+    # Local download với task tracking (chỉ khi đã qua kiểm tra)
     task_id = str(uuid.uuid4())
     _tasks[task_id] = {
         'status': 'pending',
@@ -490,5 +546,6 @@ def serve_file(filename):
 
 # ============== Run ==============
 if __name__ == "__main__":
+    import subprocess  # thêm import này để tránh lỗi NameError
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
