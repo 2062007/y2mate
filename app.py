@@ -4,11 +4,12 @@ import time
 import re
 import random
 import threading
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 
 import requests
-from flask import Flask, request, jsonify, render_template_string, send_file, abort
+from flask import Flask, request, jsonify, render_template_string, send_file, abort, Response
 import yt_dlp
 
 # ============== CONFIG ==============
@@ -24,7 +25,18 @@ CONCURRENT_FRAGMENTS = int(os.environ.get("CONCURRENT_FRAGMENTS", 10))
 # ============== APP ==============
 app = Flask(__name__)
 
-# ---------- HTML UI (Dark Mode + Progress) ----------
+# ============== Task Storage ==============
+_tasks = {}  # task_id -> {
+              #   'status': 'downloading'|'processing'|'completed'|'error',
+              #   'video_progress': 0,
+              #   'audio_progress': 0,
+              #   'merge_progress': 0,
+              #   'file': None,
+              #   'filename': None,
+              #   'error': None
+              # }
+
+# ---------- HTML UI with 3 Progress Bars ----------
 INDEX_HTML = """
 <!doctype html>
 <html>
@@ -65,16 +77,42 @@ INDEX_HTML = """
         </label>
       </div>
 
-      <!-- Progress Bar -->
-      <div id="progressContainer" class="hidden">
-        <div class="flex justify-between text-xs text-gray-400 mb-1">
-          <span id="progressStatus">Đang chuẩn bị...</span>
-          <span id="progressPercent">0%</span>
+      <!-- Progress Bars -->
+      <div id="progressContainer" class="hidden space-y-3">
+        <!-- Video Progress -->
+        <div>
+          <div class="flex justify-between text-xs text-gray-400 mb-1">
+            <span>📹 Tải video</span>
+            <span id="videoPercent">0%</span>
+          </div>
+          <div class="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div id="videoBar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+          </div>
         </div>
-        <div class="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
-          <div id="progressBar" class="bg-emerald-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+        
+        <!-- Audio Progress -->
+        <div>
+          <div class="flex justify-between text-xs text-gray-400 mb-1">
+            <span>🎵 Tải âm thanh</span>
+            <span id="audioPercent">0%</span>
+          </div>
+          <div class="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div id="audioBar" class="bg-purple-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+          </div>
         </div>
-        <div id="speedInfo" class="text-xs text-gray-500 mt-1 text-center"></div>
+        
+        <!-- Merge Progress -->
+        <div>
+          <div class="flex justify-between text-xs text-gray-400 mb-1">
+            <span>🔄 Ghép video & âm thanh</span>
+            <span id="mergePercent">0%</span>
+          </div>
+          <div class="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div id="mergeBar" class="bg-emerald-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+          </div>
+        </div>
+        
+        <div id="speedInfo" class="text-xs text-gray-500 text-center"></div>
       </div>
 
       <button id="btnDownload" class="w-full rounded-xl py-3 bg-emerald-500 hover:bg-emerald-600 text-black font-semibold transition-all">
@@ -105,12 +143,16 @@ INDEX_HTML = """
   const linkbox = document.getElementById('linkbox');
   const dlink = document.getElementById('dlink');
   const progressContainer = document.getElementById('progressContainer');
-  const progressBar = document.getElementById('progressBar');
-  const progressPercent = document.getElementById('progressPercent');
-  const progressStatus = document.getElementById('progressStatus');
+  const videoBar = document.getElementById('videoBar');
+  const videoPercent = document.getElementById('videoPercent');
+  const audioBar = document.getElementById('audioBar');
+  const audioPercent = document.getElementById('audioPercent');
+  const mergeBar = document.getElementById('mergeBar');
+  const mergePercent = document.getElementById('mergePercent');
   const speedInfo = document.getElementById('speedInfo');
 
   let eventSource = null;
+  let taskId = null;
 
   btnDownload.onclick = async () => {
     const url = urlInput.value.trim();
@@ -123,18 +165,19 @@ INDEX_HTML = """
     status.textContent = '';
     linkbox.classList.add('hidden');
     progressContainer.classList.remove('hidden');
-    progressBar.style.width = '0%';
-    progressPercent.textContent = '0%';
-    progressStatus.textContent = 'Đang kết nối...';
+    videoBar.style.width = '0%';
+    videoPercent.textContent = '0%';
+    audioBar.style.width = '0%';
+    audioPercent.textContent = '0%';
+    mergeBar.style.width = '0%';
+    mergePercent.textContent = '0%';
     speedInfo.textContent = '';
     btnDownload.disabled = true;
     btnDownload.textContent = '⏳ Đang tải...';
 
-    // Close existing EventSource
     if (eventSource) eventSource.close();
 
     try {
-      // Start download with progress tracking
       const response = await fetch('/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -147,50 +190,41 @@ INDEX_HTML = """
       }
 
       const data = await response.json();
+      taskId = data.task_id;
 
-      if (data.progress_url) {
-        // Connect to SSE for progress updates
-        eventSource = new EventSource(data.progress_url);
-        eventSource.onmessage = (e) => {
-          const progress = JSON.parse(e.data);
-          const percent = progress.percent || 0;
-          progressBar.style.width = percent + '%';
-          progressPercent.textContent = Math.round(percent) + '%';
-          progressStatus.textContent = progress.status || 'Đang tải...';
-          if (progress.speed) speedInfo.textContent = '⚡ ' + progress.speed;
-        };
-        eventSource.onerror = () => eventSource.close();
-
-        // Poll for completion
-        const checkInterval = setInterval(async () => {
-          const checkRes = await fetch(`/status/${data.task_id}`);
-          if (checkRes.ok) {
-            const result = await checkRes.json();
-            if (result.completed && result.file) {
-              clearInterval(checkInterval);
-              eventSource.close();
-              dlink.href = result.file;
-              dlink.textContent = '📥 ' + result.filename;
-              linkbox.classList.remove('hidden');
-              status.textContent = '✅ Thành công! File tự xóa sau 10 phút';
-              progressStatus.textContent = 'Hoàn tất!';
-              btnDownload.disabled = false;
-              btnDownload.textContent = '⬇️ Tải xuống';
-              setTimeout(() => progressContainer.classList.add('hidden'), 2000);
-            } else if (result.error) {
-              throw new Error(result.error);
-            }
-          }
-        }, 1000);
-      } else if (data.file) {
-        dlink.href = data.file;
-        dlink.textContent = '📥 ' + data.filename;
-        linkbox.classList.remove('hidden');
-        status.textContent = '✅ Thành công!';
-        progressContainer.classList.add('hidden');
-        btnDownload.disabled = false;
-        btnDownload.textContent = '⬇️ Tải xuống';
-      }
+      // Connect to SSE
+      eventSource = new EventSource(`/progress/${taskId}`);
+      eventSource.onmessage = (e) => {
+        const progress = JSON.parse(e.data);
+        
+        videoBar.style.width = progress.video_progress + '%';
+        videoPercent.textContent = Math.round(progress.video_progress) + '%';
+        audioBar.style.width = progress.audio_progress + '%';
+        audioPercent.textContent = Math.round(progress.audio_progress) + '%';
+        mergeBar.style.width = progress.merge_progress + '%';
+        mergePercent.textContent = Math.round(progress.merge_progress) + '%';
+        
+        if (progress.speed) speedInfo.textContent = '⚡ ' + progress.speed;
+        
+        if (progress.status === 'completed') {
+          eventSource.close();
+          dlink.href = progress.file;
+          dlink.textContent = '📥 ' + progress.filename;
+          linkbox.classList.remove('hidden');
+          status.textContent = '✅ Thành công! File tự xóa sau 10 phút';
+          btnDownload.disabled = false;
+          btnDownload.textContent = '⬇️ Tải xuống';
+          setTimeout(() => progressContainer.classList.add('hidden'), 3000);
+        } else if (progress.status === 'error') {
+          eventSource.close();
+          throw new Error(progress.error);
+        }
+      };
+      
+      eventSource.onerror = () => {
+        eventSource.close();
+      };
+      
     } catch (e) {
       status.textContent = '❌ Lỗi: ' + e.message;
       progressContainer.classList.add('hidden');
@@ -210,7 +244,6 @@ def sanitize_title(t: str) -> str:
 
 _rr_lock = threading.Lock()
 _rr_index = 0
-_tasks = {}  # task_id -> {'completed': bool, 'file': str, 'error': str, 'progress': dict}
 
 def choose_backend() -> Optional[str]:
     global _rr_index
@@ -241,14 +274,16 @@ threading.Thread(target=background_cleaner, daemon=True).start()
 class ProgressHook:
     def __init__(self, task_id):
         self.task_id = task_id
-        self.last_percent = 0
-
+        
     def __call__(self, d):
         if d['status'] == 'downloading':
+            # Phân biệt video vs audio qua filename hoặc info_dict
+            filename = d.get('filename', '')
             total = d.get('total_bytes') or d.get('total_bytes_estimate', 1)
             downloaded = d.get('downloaded_bytes', 0)
             percent = (downloaded / total) * 100 if total > 0 else 0
             
+            # Tốc độ
             speed = d.get('speed', 0)
             speed_str = ''
             if speed:
@@ -259,72 +294,107 @@ class ProgressHook:
                 else:
                     speed_str = f'{speed:.0f} B/s'
             
-            _tasks[self.task_id]['progress'] = {
-                'percent': percent,
-                'status': f'Đang tải... {percent:.1f}%',
-                'speed': speed_str
-            }
+            # Phân biệt video hay audio (thường audio có fxxx hoặc .m4a/.webm)
+            if 'audio' in filename.lower() or filename.endswith(('.m4a', '.webm', '.m4v')):
+                _tasks[self.task_id]['audio_progress'] = percent
+            else:
+                _tasks[self.task_id]['video_progress'] = percent
+                _tasks[self.task_id]['speed'] = speed_str
+                
         elif d['status'] == 'finished':
-            _tasks[self.task_id]['progress'] = {
-                'percent': 100,
-                'status': 'Đang xử lý video...',
-                'speed': ''
-            }
+            # Một phần đã tải xong
+            filename = d.get('filename', '')
+            if 'audio' in filename.lower() or filename.endswith(('.m4a', '.webm', '.m4v')):
+                _tasks[self.task_id]['audio_progress'] = 100
+            else:
+                _tasks[self.task_id]['video_progress'] = 100
+                
+        elif d['status'] == 'processing' and 'merge' in str(d.get('info_dict', {})):
+            # Đang merge
+            _tasks[self.task_id]['merge_progress'] = d.get('progress', 0) * 100
 
-# ============== Core local download ==============
-def local_download(url: str, quality: str, iphone_compatible: bool = True) -> Tuple[bool, str, Optional[str]]:
-    format_map = {
-        "360p": ("bestvideo[height<=360]", "bestaudio"),
-        "720p": ("bestvideo[height<=720]", "bestaudio"),
-        "1080p": ("bestvideo[height<=1080]", "bestaudio"),
-        "1440p": ("bestvideo[height<=1440]", "bestaudio"),
-        "2160p": ("bestvideo[height<=2160]", "bestaudio"),
-    }
-    
-    video_fmt, audio_fmt = format_map.get(quality, ("bestvideo", "bestaudio"))
-    
-    if iphone_compatible:
-        # iPhone: H.264 video + AAC audio in MP4 container
-        video_fmt = f"{video_fmt}[vcodec^=avc1]"
-        audio_fmt = f"{audio_fmt}[acodec^=mp4a]"
-        fmt = f"{video_fmt}+{audio_fmt}/best[ext=mp4][vcodec^=avc1]"
-    else:
-        fmt = f"{video_fmt}+{audio_fmt}/best"
-
+# ============== Core local download (async) ==============
+def download_video_task(task_id: str, url: str, quality: str, iphone_compatible: bool):
+    """Chạy trong thread riêng"""
     try:
+        format_map = {
+            "360p": ("bestvideo[height<=360]", "bestaudio"),
+            "720p": ("bestvideo[height<=720]", "bestaudio"),
+            "1080p": ("bestvideo[height<=1080]", "bestaudio"),
+            "1440p": ("bestvideo[height<=1440]", "bestaudio"),
+            "2160p": ("bestvideo[height<=2160]", "bestaudio"),
+        }
+        
+        video_fmt, audio_fmt = format_map.get(quality, ("bestvideo", "bestaudio"))
+        
+        if iphone_compatible:
+            video_fmt = f"{video_fmt}[vcodec^=avc1]"
+            audio_fmt = f"{audio_fmt}[acodec^=mp4a]"
+            fmt = f"{video_fmt}+{audio_fmt}/best[ext=mp4][vcodec^=avc1]"
+        else:
+            fmt = f"{video_fmt}+{audio_fmt}/best"
+        
+        # Lấy thông tin video
         with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
             info = ydl.extract_info(url, download=False)
             title = info.get("title", "video")
             vid_id = info.get("id", "") or ""
+        
         safe_title = sanitize_title(title)
         final_file = TMP_DIR / f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}.mp4"
-
+        
         if final_file.exists():
-            return True, "exists", final_file.name
-
-        outtmpl = str(TMP_DIR / f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}.%(ext)s")
+            _tasks[task_id]['status'] = 'completed'
+            _tasks[task_id]['file'] = f"/file/{final_file.name}"
+            _tasks[task_id]['filename'] = final_file.name
+            _tasks[task_id]['merge_progress'] = 100
+            return
+        
+        outtmpl = str(TMP_DIR / f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}_%(ext)s.%(ext)s")
+        
         ydl_opts = {
             "outtmpl": outtmpl,
             "format": fmt,
             "merge_output_format": "mp4",
             "noplaylist": True,
-            "quiet": False,
-            "no_warnings": False,
+            "quiet": True,
+            "no_warnings": True,
             "concurrent_fragment_downloads": CONCURRENT_FRAGMENTS,
             "http_chunk_size": 10485760,
-            "postprocessor_args": ["-c", "copy"],
+            "progress_hooks": [ProgressHook(task_id)],
         }
-
+        
+        _tasks[task_id]['status'] = 'downloading'
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-
-        if final_file.exists():
-            return True, "downloaded", final_file.name
+        
+        # Tìm file đã tải
+        downloaded_files = list(TMP_DIR.glob(f"{safe_title}_{vid_id}_{quality}{'_iphone' if iphone_compatible else ''}_*"))
+        
+        # File cuối cùng sau merge
+        final_path = None
+        for f in downloaded_files:
+            if f.suffix == '.mp4' and not f.stem.endswith('.fmp4'):
+                final_path = f
+                break
+        
+        if final_path and final_path.exists():
+            # Rename về tên đẹp
+            final_path.rename(final_file)
+            _tasks[task_id]['status'] = 'completed'
+            _tasks[task_id]['file'] = f"/file/{final_file.name}"
+            _tasks[task_id]['filename'] = final_file.name
+            _tasks[task_id]['video_progress'] = 100
+            _tasks[task_id]['audio_progress'] = 100
+            _tasks[task_id]['merge_progress'] = 100
         else:
-            return False, "file not found after download", None
-
+            _tasks[task_id]['status'] = 'error'
+            _tasks[task_id]['error'] = "File not found after download"
+            
     except Exception as e:
-        return False, str(e), None
+        _tasks[task_id]['status'] = 'error'
+        _tasks[task_id]['error'] = str(e)
 
 # ============== Routes ==============
 @app.route("/", methods=["GET"])
@@ -340,37 +410,63 @@ def download():
     
     if not url:
         return "No url", 400
+    
+    # Tạo task ID
+    task_id = str(uuid.uuid4())
+    _tasks[task_id] = {
+        'status': 'pending',
+        'video_progress': 0,
+        'audio_progress': 0,
+        'merge_progress': 0,
+        'speed': '',
+        'file': None,
+        'filename': None,
+        'error': None
+    }
+    
+    # Chạy task trong thread riêng
+    thread = threading.Thread(target=download_video_task, args=(task_id, url, quality, iphone_compatible))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"task_id": task_id})
 
-    if not BACKENDS:
-        ok, msg, fname = local_download(url, quality, iphone_compatible)
-        if ok:
-            return jsonify({"file": f"/file/{fname}", "filename": fname})
-        else:
-            return msg, 500
-
-    tried = []
-    for attempt in range(len(BACKENDS)):
-        backend = choose_backend()
-        if backend in tried:
-            continue
-        tried.append(backend)
-        try:
-            resp = requests.post(
-                f"{backend.rstrip('/')}/download",
-                json={"url": url, "quality": quality, "iphone_compatible": iphone_compatible},
-                timeout=300,
-            )
-            if resp.status_code == 200:
-                try:
-                    return jsonify(resp.json())
-                except Exception:
-                    return resp.text, resp.status_code
-            else:
-                continue
-        except Exception:
-            continue
-
-    return "All backends failed", 502
+@app.route("/progress/<task_id>")
+def progress_stream(task_id):
+    """SSE endpoint cho progress"""
+    def generate():
+        last_progress = {}
+        while True:
+            task = _tasks.get(task_id)
+            if not task:
+                break
+            
+            progress_data = {
+                'status': task.get('status', 'pending'),
+                'video_progress': task.get('video_progress', 0),
+                'audio_progress': task.get('audio_progress', 0),
+                'merge_progress': task.get('merge_progress', 0),
+                'speed': task.get('speed', ''),
+            }
+            
+            if task.get('status') == 'completed':
+                progress_data['file'] = task.get('file')
+                progress_data['filename'] = task.get('filename')
+                yield f"data: {jsonify(progress_data).get_data(as_text=True)}\n\n"
+                break
+            elif task.get('status') == 'error':
+                progress_data['error'] = task.get('error')
+                yield f"data: {jsonify(progress_data).get_data(as_text=True)}\n\n"
+                break
+            
+            # Chỉ gửi khi có thay đổi
+            if progress_data != last_progress:
+                yield f"data: {jsonify(progress_data).get_data(as_text=True)}\n\n"
+                last_progress = progress_data.copy()
+            
+            time.sleep(0.5)
+    
+    return Response(generate(), mimetype="text/event-stream")
 
 @app.route("/file/<path:filename>", methods=["GET"])
 def serve_file(filename):
