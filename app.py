@@ -59,14 +59,21 @@ INDEX_HTML = """
       Mini-Y2mate Pro - <span class="text-emerald-400">Nam2006©</span>
     </h1>
 
-    <!-- Tabs -->
     <div class="flex gap-2 mb-6">
-      <button id="tabYoutube" class="tab-active px-4 py-2 rounded-lg font-semibold transition-all flex-1">📺 YouTube</button>
-      <button id="TabFacebook" class="tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1">📘 Facebook</button>
-      <button id="TabTikTok" class="tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1">🎵 TikTok</button>
+      <button id="tabYoutube" class="tab-active px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/e/ef/Youtube_logo.png" class="w-5 h-5 object-contain" alt="YouTube">
+        <span>YouTube</span>
+      </button>
+      <button id="TabFacebook" class="tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Facebook_logo_%28square%29.png/600px-Facebook_logo_%28square%29.png" class="w-5 h-5 object-contain" alt="Facebook">
+        <span>Facebook</span>
+      </button>
+      <button id="TabTikTok" class="tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2">
+        <img src="https://cdn.pixabay.com/photo/2021/06/15/12/28/tiktok-6338432_1280.png" class="w-5 h-5 object-contain" alt="TikTok">
+        <span>TikTok</span>
+      </button>
     </div>
 
-    <!-- YouTube Tab -->
     <div id="youtubeTab" class="space-y-4">
       <div class="flex gap-2 flex-wrap">
         <input id="urlYoutube" type="text" placeholder="https://www.youtube.com/watch?v=... hoặc playlist" class="flex-1 rounded-xl px-4 py-2 bg-gray-800 border border-gray-700 outline-none text-gray-100"/>
@@ -135,7 +142,6 @@ INDEX_HTML = """
       </div>
     </div>
 
-    <!-- Facebook Tab -->
     <div id="facebookTab" class="space-y-4 hidden">
       <div class="flex gap-2 flex-wrap">
         <input id="urlFacebook" type="text" placeholder="https://www.facebook.com/.../videos/... hoặc https://fb.watch/..." class="flex-1 rounded-xl px-4 py-2 bg-gray-800 border border-gray-700 outline-none text-gray-100"/>
@@ -189,7 +195,6 @@ INDEX_HTML = """
       </div>
     </div>
 
-    <!-- TikTok Tab -->
     <div id="tiktokTab" class="space-y-4 hidden">
       <div class="flex gap-2 flex-wrap">
         <input id="urlTikTok" type="text" placeholder="https://www.tiktok.com/@username/video/... hoặc @username hoặc #hashtag" class="flex-1 rounded-xl px-4 py-2 bg-gray-800 border border-gray-700 outline-none text-gray-100"/>
@@ -243,11 +248,10 @@ INDEX_HTML = """
       </div>
       
       <div class="bg-blue-900/30 border border-blue-700 rounded-xl p-3 text-xs">
-        💡 <span class="font-semibumb">Hỗ trợ:</span> Video đơn, profile (@username), hashtag (#tag). Bật "Tải toàn bộ" để tải nhiều video.
+        💡 <span class="font-semibold">Hỗ trợ:</span> Video đơn, profile (@username), hashtag (#tag). Bật "Tải toàn bộ" để tải nhiều video.
       </div>
     </div>
 
-    <!-- Progress Section -->
     <div id="progressSection" class="mt-6">
       <div id="multiProgressContainer" class="hidden space-y-3">
         <div id="videoRow">
@@ -328,7 +332,6 @@ INDEX_HTML = """
   let eventSource = null;
   let currentTab = 'youtube';
 
-  // Tab switching
   const tabYoutube = document.getElementById('tabYoutube');
   const tabFacebook = document.getElementById('TabFacebook');
   const tabTikTok = document.getElementById('TabTikTok');
@@ -338,9 +341,9 @@ INDEX_HTML = """
 
   function setActiveTab(tab) {
     currentTab = tab;
-    tabYoutube.className = tab === 'youtube' ? 'tab-active px-4 py-2 rounded-lg font-semibold transition-all flex-1' : 'tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1';
-    tabFacebook.className = tab === 'facebook' ? 'tab-active px-4 py-2 rounded-lg font-semibold transition-all flex-1' : 'tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1';
-    tabTikTok.className = tab === 'tiktok' ? 'tab-active px-4 py-2 rounded-lg font-semibold transition-all flex-1' : 'tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1';
+    tabYoutube.className = tab === 'youtube' ? 'tab-active px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2' : 'tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2';
+    tabFacebook.className = tab === 'facebook' ? 'tab-active px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2' : 'tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2';
+    tabTikTok.className = tab === 'tiktok' ? 'tab-active px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2' : 'tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2';
     youtubeTab.classList.toggle('hidden', tab !== 'youtube');
     facebookTab.classList.toggle('hidden', tab !== 'facebook');
     tiktokTab.classList.toggle('hidden', tab !== 'tiktok');
@@ -350,7 +353,6 @@ INDEX_HTML = """
   tabFacebook.onclick = () => setActiveTab('facebook');
   tabTikTok.onclick = () => setActiveTab('tiktok');
 
-  // Audio options toggle for YouTube
   const youtubeDownloadRadios = document.querySelectorAll('input[name="downloadTypeYoutube"]');
   const youtubeAudioOptions = document.getElementById('youtubeAudioOptions');
   function toggleYoutubeAudio() {
@@ -360,7 +362,6 @@ INDEX_HTML = """
   youtubeDownloadRadios.forEach(radio => radio.addEventListener('change', toggleYoutubeAudio));
   toggleYoutubeAudio();
 
-  // Audio options toggle for Facebook
   const facebookDownloadRadios = document.querySelectorAll('input[name="downloadTypeFacebook"]');
   const facebookAudioOptions = document.getElementById('facebookAudioOptions');
   function toggleFacebookAudio() {
@@ -370,7 +371,6 @@ INDEX_HTML = """
   facebookDownloadRadios.forEach(radio => radio.addEventListener('change', toggleFacebookAudio));
   toggleFacebookAudio();
 
-  // Audio options toggle for TikTok
   const tiktokDownloadRadios = document.querySelectorAll('input[name="downloadTypeTikTok"]');
   const tiktokAudioOptions = document.getElementById('tiktokAudioOptions');
   function toggleTikTokAudio() {
@@ -380,7 +380,6 @@ INDEX_HTML = """
   tiktokDownloadRadios.forEach(radio => radio.addEventListener('change', toggleTikTokAudio));
   toggleTikTokAudio();
 
-  // TikTok batch options
   const tiktokBatchCheckbox = document.getElementById('tiktokBatchMode');
   const tiktokBatchOptions = document.getElementById('tiktokBatchOptions');
   tiktokBatchCheckbox.onchange = () => {
@@ -786,6 +785,93 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
         task['audio_progress'] = 100
         task['merge_progress'] = 100
         
+    except Exception as e:
+        _tasks[task_id]['status'] = 'error'
+        _tasks[task_id]['error'] = str(e)
+
+def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: bool,
+                      download_type: str, audio_format: str, audio_bitrate: int):
+    try:
+        task = _tasks[task_id]
+        task['status'] = 'downloading'
+        
+        with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if 'entries' not in info:
+                raise Exception("URL không phải là playlist hoặc không chứa video nào")
+            entries = [entry for entry in info['entries'] if entry]
+            total = len(entries)
+            if total == 0:
+                raise Exception("Playlist rỗng")
+        
+        task['total_items'] = total
+        task['processed'] = 0
+        zip_filename = f"playlist_{uuid.uuid4().hex[:8]}.zip"
+        zip_path = TMP_DIR / zip_filename
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for idx, entry in enumerate(entries, 1):
+                video_url = entry.get('url') or f"https://www.youtube.com/watch?v={entry['id']}"
+                video_title = sanitize_title(entry.get('title', f'video_{idx}'))
+                vid_id = entry.get('id', str(idx))
+                
+                task['overall_progress'] = (idx-1) / total * 100
+                task['detail'] = f"Đang tải {idx}/{total}: {video_title}"
+                
+                if download_type == 'audio':
+                    out_template = str(TMP_DIR / f"temp_{vid_id}_audio.%(ext)s")
+                    final_temp = TMP_DIR / f"temp_{vid_id}_audio.{audio_format}"
+                    ydl_opts = {
+                        'outtmpl': out_template,
+                        'format': 'bestaudio/best',
+                        'postprocessors': [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': audio_format,
+                            'preferredquality': str(audio_bitrate),
+                        }],
+                        'quiet': True,
+                        'no_warnings': True,
+                    }
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([video_url])
+                    audio_file = final_temp
+                    if not audio_file.exists():
+                        candidates = list(TMP_DIR.glob(f"temp_{vid_id}_audio.{audio_format}"))
+                        if candidates:
+                            audio_file = candidates[0]
+                    arcname = f"{video_title}.{audio_format}"
+                    zipf.write(audio_file, arcname)
+                    audio_file.unlink()
+                else:
+                    temp_file = TMP_DIR / f"temp_{vid_id}_{quality}.mp4"
+                    fmt = f"bestvideo[height<={quality[:-1]}]+bestaudio/best" if quality != "2160p" else "bestvideo+bestaudio/best"
+                    if iphone_compatible:
+                        fmt = f"bestvideo[height<={quality[:-1]}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[ext=mp4]"
+                    ydl_opts = {
+                        'outtmpl': str(TMP_DIR / f"temp_{vid_id}_{quality}.%(ext)s"),
+                        'format': fmt,
+                        'merge_output_format': 'mp4',
+                        'noplaylist': True,
+                        'quiet': True,
+                        'no_warnings': True,
+                    }
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([video_url])
+                    if not temp_file.exists():
+                        candidates = list(TMP_DIR.glob(f"temp_{vid_id}_{quality}*.mp4"))
+                        if candidates:
+                            candidates[0].rename(temp_file)
+                    arcname = f"{video_title}.mp4"
+                    zipf.write(temp_file, arcname)
+                    temp_file.unlink()
+                
+                task['processed'] = idx
+                task['overall_progress'] = idx / total * 100
+        
+        task['status'] = 'completed'
+        task['file'] = f"/file/{zip_filename}"
+        task['filename'] = zip_filename
+        task['overall_progress'] = 100
     except Exception as e:
         _tasks[task_id]['status'] = 'error'
         _tasks[task_id]['error'] = str(e)
