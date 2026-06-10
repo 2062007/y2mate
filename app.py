@@ -52,7 +52,6 @@ INDEX_HTML = """
       <div class="flex gap-4 flex-wrap">
         <label class="inline-flex items-center gap-2"><input type="radio" name="dlType" value="video" checked> <span>🎬 Video</span></label>
         <label class="inline-flex items-center gap-2"><input type="radio" name="dlType" value="audio"> <span>🎵 Audio</span></label>
-        <label class="inline-flex items-center gap-2"><input type="radio" name="dlType" value="playlist"> <span>📀 Playlist (zip)</span></label>
       </div>
 
       <div id="videoOptions" class="space-y-3">
@@ -94,9 +93,9 @@ INDEX_HTML = """
         </select>
       </div>
 
-      <!-- 3 thanh tiến trình riêng biệt -->
+      <!-- 3 thanh tiến trình - sẽ ẩn/hiện theo loại tải -->
       <div id="progressContainer" class="hidden space-y-3">
-        <div>
+        <div id="videoProgressDiv">
           <div class="flex justify-between text-xs text-gray-400 mb-1">
             <span>📹 Tải video</span>
             <span id="videoPercent">0%</span>
@@ -105,7 +104,7 @@ INDEX_HTML = """
             <div id="videoBar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
           </div>
         </div>
-        <div>
+        <div id="audioProgressDiv">
           <div class="flex justify-between text-xs text-gray-400 mb-1">
             <span>🎵 Tải âm thanh</span>
             <span id="audioPercent">0%</span>
@@ -114,7 +113,7 @@ INDEX_HTML = """
             <div id="audioBar" class="bg-purple-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
           </div>
         </div>
-        <div>
+        <div id="mergeProgressDiv">
           <div class="flex justify-between text-xs text-gray-400 mb-1">
             <span>🔄 Ghép video & âm thanh</span>
             <span id="mergePercent">0%</span>
@@ -149,15 +148,26 @@ INDEX_HTML = """
   const radios = document.querySelectorAll('input[name="dlType"]');
   const videoOpts = document.getElementById('videoOptions');
   const audioOpts = document.getElementById('audioOptions');
+  const videoProgressDiv = document.getElementById('videoProgressDiv');
+  const audioProgressDiv = document.getElementById('audioProgressDiv');
+  const mergeProgressDiv = document.getElementById('mergeProgressDiv');
 
   function toggleOptions() {
     const selected = document.querySelector('input[name="dlType"]:checked').value;
     if (selected === 'audio') {
       videoOpts.classList.add('hidden');
       audioOpts.classList.remove('hidden');
+      // Khi tải audio: chỉ hiện thanh âm thanh
+      videoProgressDiv.classList.add('hidden');
+      audioProgressDiv.classList.remove('hidden');
+      mergeProgressDiv.classList.add('hidden');
     } else {
       videoOpts.classList.remove('hidden');
       audioOpts.classList.add('hidden');
+      // Khi tải video: hiện cả 3 thanh
+      videoProgressDiv.classList.remove('hidden');
+      audioProgressDiv.classList.remove('hidden');
+      mergeProgressDiv.classList.remove('hidden');
     }
   }
   radios.forEach(r => r.addEventListener('change', toggleOptions));
@@ -197,6 +207,8 @@ INDEX_HTML = """
     statusDiv.textContent = '';
     linkbox.classList.add('hidden');
     progressContainer.classList.remove('hidden');
+    
+    // Reset tất cả thanh
     videoBar.style.width = '0%';
     videoPercent.textContent = '0%';
     audioBar.style.width = '0%';
@@ -236,23 +248,35 @@ INDEX_HTML = """
       eventSource.onmessage = (e) => {
         const prog = JSON.parse(e.data);
         
-        // Cập nhật 3 thanh
-        if (prog.type === 'playlist') {
-          // Playlist: chỉ hiển thị tổng tiến độ qua thanh merge (hoặc video)
+        if (prog.is_playlist) {
+          // Playlist (cả video và audio đều có thể là playlist)
           const percent = prog.playlist_progress || 0;
-          mergeBar.style.width = percent + '%';
-          mergePercent.textContent = Math.round(percent) + '%';
+          // Dùng thanh audio để hiển thị tiến độ playlist
+          if (dlType === 'audio') {
+            audioBar.style.width = percent + '%';
+            audioPercent.textContent = Math.round(percent) + '%';
+          } else {
+            mergeBar.style.width = percent + '%';
+            mergePercent.textContent = Math.round(percent) + '%';
+          }
           if (prog.current_item) {
             extraInfo.textContent = `📌 Đang tải: ${prog.current_item} (${prog.done_count}/${prog.total_count})`;
           }
         } else {
           // Video/audio đơn
-          videoBar.style.width = (prog.video_progress || 0) + '%';
-          videoPercent.textContent = Math.round(prog.video_progress || 0) + '%';
-          audioBar.style.width = (prog.audio_progress || 0) + '%';
-          audioPercent.textContent = Math.round(prog.audio_progress || 0) + '%';
-          mergeBar.style.width = (prog.merge_progress || 0) + '%';
-          mergePercent.textContent = Math.round(prog.merge_progress || 0) + '%';
+          if (dlType === 'audio') {
+            // Audio: chỉ cập nhật thanh audio
+            audioBar.style.width = (prog.audio_progress || 0) + '%';
+            audioPercent.textContent = Math.round(prog.audio_progress || 0) + '%';
+          } else {
+            // Video: cập nhật cả 3 thanh
+            videoBar.style.width = (prog.video_progress || 0) + '%';
+            videoPercent.textContent = Math.round(prog.video_progress || 0) + '%';
+            audioBar.style.width = (prog.audio_progress || 0) + '%';
+            audioPercent.textContent = Math.round(prog.audio_progress || 0) + '%';
+            mergeBar.style.width = (prog.merge_progress || 0) + '%';
+            mergePercent.textContent = Math.round(prog.merge_progress || 0) + '%';
+          }
           if (prog.speed) speedInfo.textContent = '⚡ ' + prog.speed;
         }
         
@@ -314,6 +338,10 @@ def background_cleaner():
 
 threading.Thread(target=background_cleaner, daemon=True).start()
 
+def is_playlist_url(url: str) -> bool:
+    """Kiểm tra URL có phải playlist không"""
+    return 'list=' in url or '/playlist/' in url
+
 class ProgressHook:
     def __init__(self, task_id, is_audio=False):
         self.task_id = task_id
@@ -346,7 +374,6 @@ class ProgressHook:
             else:
                 _tasks[self.task_id]['video_progress'] = 100
         elif d['status'] == 'processing':
-            # Tăng merge progress khi đang ghép
             if 'merge' in str(d.get('info_dict', {})).lower():
                 current = _tasks[self.task_id].get('merge_progress', 0)
                 _tasks[self.task_id]['merge_progress'] = min(100, current + 20)
@@ -355,7 +382,7 @@ def download_single(task_id: str, url: str, dl_type: str, quality: str, iphone: 
                     video_format: str, audio_format: str):
     try:
         if dl_type == 'audio':
-            _tasks[task_id]['merge_progress'] = 100  # Không cần merge
+            _tasks[task_id]['merge_progress'] = 100
             outtmpl = str(TMP_DIR / f"%(title)s_%(id)s.%(ext)s")
             ydl_opts = {
                 "outtmpl": outtmpl,
@@ -386,7 +413,6 @@ def download_single(task_id: str, url: str, dl_type: str, quality: str, iphone: 
                 _tasks[task_id]['audio_progress'] = 100
                 _tasks[task_id]['merge_progress'] = 100
         else:
-            # Tải video
             format_map = {
                 "360p": ("bestvideo[height<=360]", "bestaudio"),
                 "720p": ("bestvideo[height<=720]", "bestaudio"),
@@ -465,7 +491,7 @@ def download_playlist(task_id: str, url: str, dl_type: str, quality: str, iphone
         _tasks[task_id]['total_count'] = total
         _tasks[task_id]['done_count'] = 0
         _tasks[task_id]['playlist_progress'] = 0
-        _tasks[task_id]['type'] = 'playlist'
+        _tasks[task_id]['is_playlist'] = True
 
         downloaded_files = []
 
@@ -588,6 +614,10 @@ def download():
         return "All backends failed", 502
 
     task_id = str(uuid.uuid4())
+    
+    # Kiểm tra xem có phải playlist không
+    is_playlist = 'list=' in url or '/playlist/' in url
+    
     _tasks[task_id] = {
         'status': 'pending',
         'type': dl_type,
@@ -599,9 +629,10 @@ def download():
         'file': None,
         'filename': None,
         'error': None,
+        'is_playlist': is_playlist,
     }
 
-    if dl_type == 'playlist':
+    if is_playlist:
         thread = threading.Thread(target=download_playlist, args=(
             task_id, url, dl_type, quality, iphone, video_format, audio_format
         ))
@@ -633,6 +664,7 @@ def progress_stream(task_id):
                 'current_item': task.get('current_item', ''),
                 'done_count': task.get('done_count', 0),
                 'total_count': task.get('total_count', 0),
+                'is_playlist': task.get('is_playlist', False),
             }
             if task.get('status') == 'completed':
                 prog['file'] = task.get('file')
