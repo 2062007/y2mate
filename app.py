@@ -8,7 +8,7 @@ import uuid
 import json
 import zipfile
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Dict, Any
 
 import requests
 from flask import Flask, request, jsonify, render_template_string, send_file, abort, Response
@@ -94,18 +94,37 @@ INDEX_HTML = """
         </select>
       </div>
 
+      <!-- 3 thanh tiến trình riêng biệt -->
       <div id="progressContainer" class="hidden space-y-3">
         <div>
           <div class="flex justify-between text-xs text-gray-400 mb-1">
-            <span id="progressLabel">📥 Tiến độ</span>
-            <span id="progressPercent">0%</span>
+            <span>📹 Tải video</span>
+            <span id="videoPercent">0%</span>
           </div>
           <div class="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
-            <div id="progressBar" class="bg-emerald-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+            <div id="videoBar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
           </div>
         </div>
-        <div id="extraInfo" class="text-xs text-gray-500 text-center"></div>
+        <div>
+          <div class="flex justify-between text-xs text-gray-400 mb-1">
+            <span>🎵 Tải âm thanh</span>
+            <span id="audioPercent">0%</span>
+          </div>
+          <div class="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div id="audioBar" class="bg-purple-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flex justify-between text-xs text-gray-400 mb-1">
+            <span>🔄 Ghép video & âm thanh</span>
+            <span id="mergePercent">0%</span>
+          </div>
+          <div class="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div id="mergeBar" class="bg-emerald-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+          </div>
+        </div>
         <div id="speedInfo" class="text-xs text-gray-500 text-center"></div>
+        <div id="extraInfo" class="text-xs text-gray-500 text-center"></div>
       </div>
 
       <button id="btnDownload" class="w-full rounded-xl py-3 bg-emerald-500 hover:bg-emerald-600 text-black font-semibold transition-all">
@@ -154,11 +173,14 @@ INDEX_HTML = """
   const linkbox = document.getElementById('linkbox');
   const dlink = document.getElementById('dlink');
   const progressContainer = document.getElementById('progressContainer');
-  const progressBar = document.getElementById('progressBar');
-  const progressPercent = document.getElementById('progressPercent');
-  const progressLabel = document.getElementById('progressLabel');
-  const extraInfo = document.getElementById('extraInfo');
+  const videoBar = document.getElementById('videoBar');
+  const videoPercent = document.getElementById('videoPercent');
+  const audioBar = document.getElementById('audioBar');
+  const audioPercent = document.getElementById('audioPercent');
+  const mergeBar = document.getElementById('mergeBar');
+  const mergePercent = document.getElementById('mergePercent');
   const speedInfo = document.getElementById('speedInfo');
+  const extraInfo = document.getElementById('extraInfo');
 
   let eventSource = null;
 
@@ -175,13 +197,16 @@ INDEX_HTML = """
     statusDiv.textContent = '';
     linkbox.classList.add('hidden');
     progressContainer.classList.remove('hidden');
-    progressBar.style.width = '0%';
-    progressPercent.textContent = '0%';
-    extraInfo.textContent = '';
+    videoBar.style.width = '0%';
+    videoPercent.textContent = '0%';
+    audioBar.style.width = '0%';
+    audioPercent.textContent = '0%';
+    mergeBar.style.width = '0%';
+    mergePercent.textContent = '0%';
     speedInfo.textContent = '';
+    extraInfo.textContent = '';
     btnDownload.disabled = true;
     btnDownload.textContent = '⏳ Đang tải...';
-    progressLabel.textContent = dlType === 'playlist' ? '📀 Tổng tiến độ playlist' : '📥 Tiến độ';
 
     if (eventSource) eventSource.close();
 
@@ -211,16 +236,25 @@ INDEX_HTML = """
       eventSource.onmessage = (e) => {
         const prog = JSON.parse(e.data);
         
-        let percent = 0;
+        // Cập nhật 3 thanh
         if (prog.type === 'playlist') {
-          percent = prog.playlist_progress || 0;
-          extraInfo.textContent = prog.current_item ? `📌 Đang tải: ${prog.current_item} (${prog.done_count}/${prog.total_count})` : '';
+          // Playlist: chỉ hiển thị tổng tiến độ qua thanh merge (hoặc video)
+          const percent = prog.playlist_progress || 0;
+          mergeBar.style.width = percent + '%';
+          mergePercent.textContent = Math.round(percent) + '%';
+          if (prog.current_item) {
+            extraInfo.textContent = `📌 Đang tải: ${prog.current_item} (${prog.done_count}/${prog.total_count})`;
+          }
         } else {
-          percent = prog.video_progress || prog.audio_progress || 0;
+          // Video/audio đơn
+          videoBar.style.width = (prog.video_progress || 0) + '%';
+          videoPercent.textContent = Math.round(prog.video_progress || 0) + '%';
+          audioBar.style.width = (prog.audio_progress || 0) + '%';
+          audioPercent.textContent = Math.round(prog.audio_progress || 0) + '%';
+          mergeBar.style.width = (prog.merge_progress || 0) + '%';
+          mergePercent.textContent = Math.round(prog.merge_progress || 0) + '%';
           if (prog.speed) speedInfo.textContent = '⚡ ' + prog.speed;
         }
-        progressBar.style.width = percent + '%';
-        progressPercent.textContent = Math.round(percent) + '%';
         
         if (prog.status === 'completed') {
           eventSource.close();
@@ -311,11 +345,17 @@ class ProgressHook:
                 _tasks[self.task_id]['audio_progress'] = 100
             else:
                 _tasks[self.task_id]['video_progress'] = 100
+        elif d['status'] == 'processing':
+            # Tăng merge progress khi đang ghép
+            if 'merge' in str(d.get('info_dict', {})).lower():
+                current = _tasks[self.task_id].get('merge_progress', 0)
+                _tasks[self.task_id]['merge_progress'] = min(100, current + 20)
 
 def download_single(task_id: str, url: str, dl_type: str, quality: str, iphone: bool,
                     video_format: str, audio_format: str):
     try:
         if dl_type == 'audio':
+            _tasks[task_id]['merge_progress'] = 100  # Không cần merge
             outtmpl = str(TMP_DIR / f"%(title)s_%(id)s.%(ext)s")
             ydl_opts = {
                 "outtmpl": outtmpl,
@@ -344,7 +384,9 @@ def download_single(task_id: str, url: str, dl_type: str, quality: str, iphone: 
                 _tasks[task_id]['file'] = f"/file/{final_file.name}"
                 _tasks[task_id]['filename'] = final_file.name
                 _tasks[task_id]['audio_progress'] = 100
+                _tasks[task_id]['merge_progress'] = 100
         else:
+            # Tải video
             format_map = {
                 "360p": ("bestvideo[height<=360]", "bestaudio"),
                 "720p": ("bestvideo[height<=720]", "bestaudio"),
@@ -395,6 +437,8 @@ def download_single(task_id: str, url: str, dl_type: str, quality: str, iphone: 
                 _tasks[task_id]['file'] = f"/file/{final_file.name}"
                 _tasks[task_id]['filename'] = final_file.name
                 _tasks[task_id]['video_progress'] = 100
+                _tasks[task_id]['audio_progress'] = 100
+                _tasks[task_id]['merge_progress'] = 100
             else:
                 raise Exception("Không tìm thấy file sau khi tải")
     except Exception as e:
@@ -549,6 +593,7 @@ def download():
         'type': dl_type,
         'video_progress': 0,
         'audio_progress': 0,
+        'merge_progress': 0,
         'playlist_progress': 0,
         'speed': '',
         'file': None,
@@ -582,6 +627,7 @@ def progress_stream(task_id):
                 'type': task.get('type', 'video'),
                 'video_progress': task.get('video_progress', 0),
                 'audio_progress': task.get('audio_progress', 0),
+                'merge_progress': task.get('merge_progress', 0),
                 'playlist_progress': task.get('playlist_progress', 0),
                 'speed': task.get('speed', ''),
                 'current_item': task.get('current_item', ''),
