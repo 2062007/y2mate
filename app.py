@@ -65,7 +65,7 @@ INDEX_HTML = """
         <span>YouTube</span>
       </button>
       <button id="TabFacebook" class="tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2">
-        <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Facebook_logo_%28square%29.png/600px-Facebook_logo_%28square%29.png" class="w-5 h-5 object-contain" alt="Facebook">
+        <img src="https://img.magnific.com/psd-cao-cap/logo-facebook-tren-mot-vong-tron-mau-xanh-lam_705838-12823.jpg?semt=ais_hybrid&w=740&q=80" class="w-5 h-5 object-contain" alt="Facebook">
         <span>Facebook</span>
       </button>
       <button id="TabTikTok" class="tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2">
