@@ -65,7 +65,7 @@ INDEX_HTML = """
         <span>YouTube</span>
       </button>
       <button id="TabFacebook" class="tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2">
-        <img src="https://img.magnific.com/psd-cao-cap/logo-facebook-tren-mot-vong-tron-mau-xanh-lam_705838-12823.jpg" class="w-5 h-5 object-contain" alt="Facebook">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Facebook_logo_%28square%29.png/600px-Facebook_logo_%28square%29.png" class="w-5 h-5 object-contain" alt="Facebook">
         <span>Facebook</span>
       </button>
       <button id="TabTikTok" class="tab-inactive px-4 py-2 rounded-lg font-semibold transition-all flex-1 flex items-center justify-center gap-2">
@@ -198,6 +198,11 @@ INDEX_HTML = """
     <div id="tiktokTab" class="space-y-4 hidden">
       <div class="flex gap-2 flex-wrap">
         <input id="urlTikTok" type="text" placeholder="https://www.tiktok.com/@username/video/... hoặc @username hoặc #hashtag" class="flex-1 rounded-xl px-4 py-2 bg-gray-800 border border-gray-700 outline-none text-gray-100"/>
+        <select id="qualityTikTok" class="rounded-xl px-3 py-2 bg-gray-800 border border-gray-700 text-gray-100">
+          <option value="360p">360p</option>
+          <option value="720p" selected>720p</option>
+          <option value="1080p">1080p</option>
+        </select>
       </div>
 
       <div class="flex gap-4 bg-gray-800/50 rounded-xl p-3 border border-gray-700">
@@ -230,6 +235,17 @@ INDEX_HTML = """
 
       <div class="flex items-center justify-between bg-gray-800/50 rounded-xl p-3 border border-gray-700">
         <div class="flex items-center gap-2">
+          <svg class="w-5 h-5 text-gray-400" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+          <span class="text-sm font-medium">iPhone Compatible (H.264 + AAC)</span>
+        </div>
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" id="tiktokIphoneMode" class="sr-only peer" checked>
+          <div class="w-11 h-6 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+        </label>
+      </div>
+
+      <div class="flex items-center justify-between bg-gray-800/50 rounded-xl p-3 border border-gray-700">
+        <div class="flex items-center gap-2">
           <svg class="w-5 h-5 text-gray-400" fill="currentColor" viewBox="0 0 24 24"><path d="M4 6h16v2H4V6zm2 4h12v2H6v-2zm14 4H4v2h16v-2z"/></svg>
           <span class="text-sm font-medium">Tải toàn bộ (profile/hashtag)</span>
         </div>
@@ -249,6 +265,10 @@ INDEX_HTML = """
       
       <div class="bg-blue-900/30 border border-blue-700 rounded-xl p-3 text-xs">
         💡 <span class="font-semibold">Hỗ trợ:</span> Video đơn, profile (@username), hashtag (#tag). Bật "Tải toàn bộ" để tải nhiều video.
+      </div>
+      
+      <div class="bg-green-900/30 border border-green-700 rounded-xl p-3 text-xs">
+        📱 <span class="font-semibold">iPhone Compatible:</span> Bật để chuyển đổi video sang chuẩn H.264 + AAC tương thích iPhone.
       </div>
     </div>
 
@@ -413,13 +433,13 @@ INDEX_HTML = """
       limit = 0;
     } else {
       url = document.getElementById('urlTikTok').value.trim();
-      quality = '720p';
-      iphone = false;
+      quality = document.getElementById('qualityTikTok').value;
+      iphone = document.getElementById('tiktokIphoneMode').checked;
       downloadType = document.querySelector('input[name="downloadTypeTikTok"]:checked').value;
       audioFormat = document.getElementById('tiktokAudioFormat').value;
       audioBitrate = parseInt(document.getElementById('tiktokAudioBitrate').value);
       playlistMode = false;
-      convertForIphone = false;
+      convertForIphone = iphone;
       batchMode = document.getElementById('tiktokBatchMode').checked;
       limit = parseInt(document.getElementById('tiktokLimit').value) || 10;
     }
@@ -672,6 +692,7 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
         task['status'] = 'downloading'
         is_audio = (download_type == 'audio')
         is_facebook = (platform == 'facebook')
+        is_tiktok = (platform == 'tiktok')
         
         with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -724,6 +745,8 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
         else:
             if is_facebook:
                 fmt = "best[ext=mp4]/best"
+            elif is_tiktok:
+                fmt = "bestvideo[ext=mp4]+bestaudio/best"
             else:
                 format_map = {
                     "360p": "bestvideo[height<=360]+bestaudio/best",
@@ -739,7 +762,9 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
             temp_file = TMP_DIR / f"{base_name}_{quality}_temp.mp4"
             final_file = TMP_DIR / f"{base_name}_{quality}.mp4"
             
-            if is_facebook and convert_for_iphone:
+            if is_tiktok and convert_for_iphone:
+                final_file = TMP_DIR / f"{base_name}_{quality}_iphone.mp4"
+            elif is_facebook and convert_for_iphone:
                 final_file = TMP_DIR / f"{base_name}_{quality}_iphone.mp4"
             
             if final_file.exists():
@@ -771,7 +796,7 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
                 else:
                     raise Exception("File video không được tạo")
             
-            if is_facebook and convert_for_iphone:
+            if (is_facebook or is_tiktok) and convert_for_iphone:
                 task['merge_progress'] = 50
                 if convert_for_iphone(temp_file, final_file):
                     temp_file.unlink()
