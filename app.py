@@ -157,14 +157,12 @@ INDEX_HTML = """
     if (selected === 'audio') {
       videoOpts.classList.add('hidden');
       audioOpts.classList.remove('hidden');
-      // Khi tải audio: chỉ hiện thanh âm thanh
       videoProgressDiv.classList.add('hidden');
       audioProgressDiv.classList.remove('hidden');
       mergeProgressDiv.classList.add('hidden');
     } else {
       videoOpts.classList.remove('hidden');
       audioOpts.classList.add('hidden');
-      // Khi tải video: hiện cả 3 thanh
       videoProgressDiv.classList.remove('hidden');
       audioProgressDiv.classList.remove('hidden');
       mergeProgressDiv.classList.remove('hidden');
@@ -195,6 +193,9 @@ INDEX_HTML = """
   let eventSource = null;
 
   btnDownload.onclick = async () => {
+    // Đảm bảo UI đúng theo loại tải hiện tại
+    toggleOptions();
+
     const url = urlInput.value.trim();
     if (!url) return alert('🔗 Paste URL đi bro');
 
@@ -249,10 +250,9 @@ INDEX_HTML = """
         const prog = JSON.parse(e.data);
         
         if (prog.is_playlist) {
-          // Playlist (cả video và audio đều có thể là playlist)
           const percent = prog.playlist_progress || 0;
-          // Dùng thanh audio để hiển thị tiến độ playlist
-          if (dlType === 'audio') {
+          // Dùng loại tải từ server để quyết định thanh hiển thị
+          if (prog.type === 'audio') {
             audioBar.style.width = percent + '%';
             audioPercent.textContent = Math.round(percent) + '%';
           } else {
@@ -264,12 +264,10 @@ INDEX_HTML = """
           }
         } else {
           // Video/audio đơn
-          if (dlType === 'audio') {
-            // Audio: chỉ cập nhật thanh audio
+          if (prog.type === 'audio') {
             audioBar.style.width = (prog.audio_progress || 0) + '%';
             audioPercent.textContent = Math.round(prog.audio_progress || 0) + '%';
           } else {
-            // Video: cập nhật cả 3 thanh
             videoBar.style.width = (prog.video_progress || 0) + '%';
             videoPercent.textContent = Math.round(prog.video_progress || 0) + '%';
             audioBar.style.width = (prog.audio_progress || 0) + '%';
@@ -339,7 +337,6 @@ def background_cleaner():
 threading.Thread(target=background_cleaner, daemon=True).start()
 
 def is_playlist_url(url: str) -> bool:
-    """Kiểm tra URL có phải playlist không"""
     return 'list=' in url or '/playlist/' in url
 
 class ProgressHook:
@@ -614,10 +611,8 @@ def download():
         return "All backends failed", 502
 
     task_id = str(uuid.uuid4())
-    
-    # Kiểm tra xem có phải playlist không
     is_playlist = 'list=' in url or '/playlist/' in url
-    
+
     _tasks[task_id] = {
         'status': 'pending',
         'type': dl_type,
