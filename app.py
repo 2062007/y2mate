@@ -7,6 +7,7 @@ import uuid
 import json
 import zipfile
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -29,7 +30,7 @@ app = Flask(__name__)
 
 _tasks: Dict[str, Dict[str, Any]] = {}
 
-# ------------------ HTML (giữ nguyên, không thay đổi) ------------------
+# ------------------ HTML (giữ nguyên) ------------------
 INDEX_HTML = """
 <!doctype html>
 <html>
