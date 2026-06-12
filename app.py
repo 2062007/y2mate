@@ -30,7 +30,7 @@ app = Flask(__name__)
 
 _tasks: Dict[str, Dict[str, Any]] = {}
 
-# ------------------ HTML (giữ nguyên) ------------------
+# ------------------ HTML (giữ nguyên, không thay đổi) ------------------
 INDEX_HTML = """
 <!doctype html>
 <html>
@@ -578,11 +578,10 @@ def convert_for_iphone(input_path: Path, output_path: Path) -> bool:
     except:
         return False
 
-# ---------- Cải tiến: tải file với ID duy nhất và đổi tên ----------
 def download_with_unique_id(url: str, ydl_opts: dict) -> Path:
     """
-    Tải video/audio bằng yt-dlp với một tên file tạm thời dạng uuid.%(ext)s.
-    Trả về đường dẫn Path của file đã tải (sau khi postprocess).
+    Tải video/audio bằng yt-dlp với tên file tạm dạng uuid.%(ext)s.
+    Trả về Path của file đã tải (sau khi postprocess).
     """
     unique_id = uuid.uuid4().hex
     # Đặt outtmpl để yt-dlp ghi file vào TMP_DIR với tên unique_id và extension placeholder
@@ -593,17 +592,15 @@ def download_with_unique_id(url: str, ydl_opts: dict) -> Path:
     # Tìm file có chứa unique_id (có thể có thêm .temp, .part, nhưng cuối cùng sẽ có đúng tên)
     candidates = list(TMP_DIR.glob(f"{unique_id}.*"))
     if not candidates:
-        # Thử tìm với pattern rộng hơn (một số trường hợp postprocessor thay đổi extension)
         candidates = list(TMP_DIR.glob(f"{unique_id}*"))
     if not candidates:
         raise Exception(f"Không tìm thấy file đã tải cho ID {unique_id}")
-    # Lấy file đầu tiên (ưu tiên file có kích thước > 0)
+    # Ưu tiên file có kích thước > 0
     for f in candidates:
         if f.stat().st_size > 0:
             return f
     return candidates[0]
 
-# ------------------ Các hàm tải chính ------------------
 class SingleProgressHook:
     def __init__(self, task_id: str, is_audio: bool = False):
         self.task_id = task_id
@@ -627,7 +624,6 @@ class SingleProgressHook:
                 else:
                     speed_str = f'{speed:.0f} B/s'
             filename = d.get('filename', '')
-            # Nhận diện audio dựa trên phần mở rộng hoặc cờ is_audio
             is_audio_file = any(x in filename.lower() for x in ['.m4a', '.webm', '.aac', '.mp3', '.ogg', '.flac'])
             if self.is_audio or is_audio_file:
                 task['audio_progress'] = percent
@@ -635,11 +631,11 @@ class SingleProgressHook:
                 task['video_progress'] = percent
                 task['speed'] = speed_str
         elif d['status'] == 'finished':
-            # Tăng merge progress khi kết thúc tải một phần
             task['merge_progress'] = min(100, task.get('merge_progress', 0) + 30)
         elif d['status'] == 'processing':
             task['merge_progress'] = min(100, task.get('merge_progress', 0) + 10)
 
+# ------------------ Hàm tải đơn (sửa lỗi chính) ------------------
 def download_single(task_id: str, url: str, quality: str, iphone_compatible: bool,
                     download_type: str, audio_format: str, audio_bitrate: int,
                     convert_for_iphone_flag: bool = False, platform: str = 'youtube'):
@@ -650,7 +646,7 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
         is_facebook = (platform == 'facebook')
         is_tiktok = (platform == 'tiktok')
 
-        # Lấy thông tin video (title, id)
+        # Lấy thông tin video
         with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
             info = ydl.extract_info(url, download=False)
             if 'entries' in info:
@@ -690,28 +686,26 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
         }
 
         if is_audio:
-            # Định dạng audio
-            if is_facebook and audio_format == 'mp3':
-                # Facebook thường có m4a, cần chuyển sang mp3
-                ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio'
-            else:
-                ydl_opts['format'] = 'bestaudio/best'
+            # Tải audio: ưu tiên bestaudio, chuyển đổi sang định dạng mong muốn
+            ydl_opts['format'] = 'bestaudio/best'
             ydl_opts['postprocessors'] = [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': audio_format,
                 'preferredquality': str(audio_bitrate),
             }]
-            # Tải file với ID duy nhất
             temp_file = download_with_unique_id(url, ydl_opts)
-            # Đổi tên thành final_path
+            # Đổi tên về tên cuối cùng
             temp_file.rename(final_path)
         else:
-            # Video
+            # Tải video: không ép định dạng cứng (trừ trường hợp đặc biệt)
             if is_facebook:
-                fmt = "best[ext=mp4]/best"
+                # Facebook: lấy best video có sẵn (thường là mp4)
+                fmt = "best"
             elif is_tiktok:
+                # TikTok: lấy best video mp4 + audio
                 fmt = "bestvideo[ext=mp4]+bestaudio/best"
             else:
+                # YouTube: dùng format theo quality yêu cầu
                 format_map = {
                     "360p": "bestvideo[height<=360]+bestaudio/best",
                     "720p": "bestvideo[height<=720]+bestaudio/best",
@@ -721,47 +715,49 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
                 }
                 fmt = format_map.get(quality, "bestvideo+bestaudio/best")
                 if iphone_compatible and platform == 'youtube':
-                    # Cố gắng lấy H.264 + AAC
+                    # Ưu tiên H.264 + AAC
                     fmt = f"bestvideo[height<={quality[:-1]}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[ext=mp4][vcodec^=avc1]"
             ydl_opts['format'] = fmt
             ydl_opts['merge_output_format'] = 'mp4'
             ydl_opts['noplaylist'] = True
 
-            # Tải file
+            # Tải video
             temp_file = download_with_unique_id(url, ydl_opts)
-            task['merge_progress'] = 70  # Đã tải xong
+            task['merge_progress'] = 70
 
-            # Nếu cần convert cho iPhone (Facebook/TikTok)
+            # Nếu cần chuyển đổi cho iPhone (Facebook/TikTok)
             if (is_facebook or is_tiktok) and convert_for_iphone_flag:
                 task['merge_progress'] = 80
                 if convert_for_iphone(temp_file, final_path):
                     temp_file.unlink()
                 else:
-                    # Convert thất bại, giữ file gốc
+                    # Convert thất bại: rename file gốc thành file đích
                     temp_file.rename(final_path)
             else:
-                # Không convert, đổi tên thẳng
+                # Không convert: rename thẳng
                 temp_file.rename(final_path)
 
-        # Hoàn tất
+        # Cập nhật task
         task['status'] = 'completed'
-        task['file'] = f"/file/{final_filename}"
-        task['filename'] = final_filename
+        task['file'] = f"/file/{final_path.name}"
+        task['filename'] = final_path.name
         task['video_progress'] = 100
         task['audio_progress'] = 100
         task['merge_progress'] = 100
+        print(f"✅ [Task {task_id}] Hoàn thành: {final_path.name}")
 
     except Exception as e:
+        print(f"❌ [Task {task_id}] Lỗi: {str(e)}")
         _tasks[task_id]['status'] = 'error'
         _tasks[task_id]['error'] = str(e)
 
+# ------------------ Các hàm tải playlist và batch (giữ nguyên, đã hoạt động) ------------------
 def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: bool,
                       download_type: str, audio_format: str, audio_bitrate: int):
     try:
         task = _tasks[task_id]
         task['status'] = 'downloading'
 
-        # Lấy danh sách video trong playlist
         with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True}) as ydl:
             info = ydl.extract_info(url, download=False)
             if 'entries' not in info:
@@ -785,7 +781,6 @@ def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: b
                 task['overall_progress'] = (idx-1) / total * 100
                 task['detail'] = f"Đang tải {idx}/{total}: {video_title}"
 
-                # Tải từng video/audio
                 if download_type == 'audio':
                     temp_file = download_with_unique_id(video_url, {
                         'quiet': True,
@@ -797,7 +792,6 @@ def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: b
                             'preferredquality': str(audio_bitrate),
                         }],
                     })
-                    # Đổi tên file tạm thành tên mong muốn trong zip
                     arcname = f"{video_title}.{audio_format}"
                     zipf.write(temp_file, arcname)
                     temp_file.unlink()
@@ -832,7 +826,6 @@ def download_tiktok_batch(task_id: str, url: str, download_type: str, audio_form
         task = _tasks[task_id]
         task['status'] = 'downloading'
 
-        # Lấy danh sách video từ profile/hashtag
         ydl_opts_flat = {'quiet': True, 'extract_flat': True, 'playlistend': limit}
         with yt_dlp.YoutubeDL(ydl_opts_flat) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -911,7 +904,6 @@ def download():
     if not url:
         return "Missing url", 400
 
-    # Backend support (nếu có)
     if BACKENDS:
         for backend in BACKENDS:
             try:
