@@ -30,7 +30,7 @@ app = Flask(__name__)
 
 _tasks: Dict[str, Dict[str, Any]] = {}
 
-# ------------------ HTML (giữ nguyên, không thay đổi) ------------------
+# ------------------ HTML (đã cập nhật thêm video format select) ------------------
 INDEX_HTML = """
 <!doctype html>
 <html>
@@ -99,6 +99,20 @@ INDEX_HTML = """
         </label>
       </div>
 
+      <div id="youtubeVideoOptions" class="space-y-2 bg-gray-800/30 rounded-xl p-3 border border-gray-700">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="text-sm font-medium">Định dạng video:</span>
+          <select id="videoFormatYoutube" class="rounded-lg px-3 py-1.5 bg-gray-800 border border-gray-700 text-sm">
+            <option value="mp4">MP4</option>
+            <option value="webm">WebM</option>
+            <option value="mkv">MKV</option>
+            <option value="avi">AVI</option>
+            <option value="mov">MOV</option>
+            <option value="flv">FLV</option>
+          </select>
+        </div>
+      </div>
+
       <div id="youtubeAudioOptions" class="hidden space-y-2 bg-gray-800/30 rounded-xl p-3 border border-gray-700">
         <div class="flex items-center gap-3 flex-wrap">
           <span class="text-sm font-medium">Định dạng:</span>
@@ -109,6 +123,8 @@ INDEX_HTML = """
             <option value="aac">AAC</option>
             <option value="flac">FLAC</option>
             <option value="ogg">OGG</option>
+            <option value="wav">WAV</option>
+            <option value="opus">OPUS</option>
           </select>
           <span class="text-sm font-medium ml-2">Bitrate:</span>
           <select id="youtubeAudioBitrate" class="rounded-lg px-3 py-1.5 bg-gray-800 border border-gray-700 text-sm">
@@ -165,18 +181,39 @@ INDEX_HTML = """
         </label>
       </div>
 
+      <div id="facebookVideoOptions" class="space-y-2 bg-gray-800/30 rounded-xl p-3 border border-gray-700">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="text-sm font-medium">Định dạng video:</span>
+          <select id="videoFormatFacebook" class="rounded-lg px-3 py-1.5 bg-gray-800 border border-gray-700 text-sm">
+            <option value="mp4">MP4</option>
+            <option value="webm">WebM</option>
+            <option value="mkv">MKV</option>
+            <option value="avi">AVI</option>
+            <option value="mov">MOV</option>
+            <option value="flv">FLV</option>
+          </select>
+        </div>
+      </div>
+
       <div id="facebookAudioOptions" class="hidden space-y-2 bg-gray-800/30 rounded-xl p-3 border border-gray-700">
         <div class="flex items-center gap-3 flex-wrap">
           <span class="text-sm font-medium">Định dạng:</span>
           <select id="facebookAudioFormat" class="rounded-lg px-3 py-1.5 bg-gray-800 border border-gray-700 text-sm">
             <option value="mp3">MP3</option>
             <option value="m4a">M4A</option>
+            <option value="aac">AAC</option>
+            <option value="flac">FLAC</option>
+            <option value="ogg">OGG</option>
+            <option value="wav">WAV</option>
+            <option value="opus">OPUS</option>
           </select>
           <span class="text-sm font-medium ml-2">Bitrate:</span>
           <select id="facebookAudioBitrate" class="rounded-lg px-3 py-1.5 bg-gray-800 border border-gray-700 text-sm">
             <option value="64">64 kbps</option>
             <option value="128" selected>128 kbps</option>
             <option value="192">192 kbps</option>
+            <option value="256">256 kbps</option>
+            <option value="320">320 kbps</option>
           </select>
         </div>
       </div>
@@ -218,6 +255,20 @@ INDEX_HTML = """
         </label>
       </div>
 
+      <div id="tiktokVideoOptions" class="space-y-2 bg-gray-800/30 rounded-xl p-3 border border-gray-700">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="text-sm font-medium">Định dạng video:</span>
+          <select id="videoFormatTikTok" class="rounded-lg px-3 py-1.5 bg-gray-800 border border-gray-700 text-sm">
+            <option value="mp4">MP4</option>
+            <option value="webm">WebM</option>
+            <option value="mkv">MKV</option>
+            <option value="avi">AVI</option>
+            <option value="mov">MOV</option>
+            <option value="flv">FLV</option>
+          </select>
+        </div>
+      </div>
+
       <div id="tiktokAudioOptions" class="hidden space-y-2 bg-gray-800/30 rounded-xl p-3 border border-gray-700">
         <div class="flex items-center gap-3 flex-wrap">
           <span class="text-sm font-medium">Định dạng:</span>
@@ -225,12 +276,18 @@ INDEX_HTML = """
             <option value="mp3">MP3</option>
             <option value="m4a">M4A</option>
             <option value="aac">AAC</option>
+            <option value="flac">FLAC</option>
+            <option value="ogg">OGG</option>
+            <option value="wav">WAV</option>
+            <option value="opus">OPUS</option>
           </select>
           <span class="text-sm font-medium ml-2">Bitrate:</span>
           <select id="tiktokAudioBitrate" class="rounded-lg px-3 py-1.5 bg-gray-800 border border-gray-700 text-sm">
             <option value="64">64 kbps</option>
             <option value="128" selected>128 kbps</option>
             <option value="192">192 kbps</option>
+            <option value="256">256 kbps</option>
+            <option value="320">320 kbps</option>
           </select>
         </div>
       </div>
@@ -375,32 +432,35 @@ INDEX_HTML = """
   tabFacebook.onclick = () => setActiveTab('facebook');
   tabTikTok.onclick = () => setActiveTab('tiktok');
 
-  const youtubeDownloadRadios = document.querySelectorAll('input[name="downloadTypeYoutube"]');
+  // Xử lý hiển thị tùy chọn video/audio cho YouTube
+  const youtubeVideoOptions = document.getElementById('youtubeVideoOptions');
   const youtubeAudioOptions = document.getElementById('youtubeAudioOptions');
-  function toggleYoutubeAudio() {
+  const youtubeRadios = document.querySelectorAll('input[name="downloadTypeYoutube"]');
+  youtubeRadios.forEach(r => r.addEventListener('change', () => {
     const isAudio = document.querySelector('input[name="downloadTypeYoutube"]:checked').value === 'audio';
+    youtubeVideoOptions.classList.toggle('hidden', isAudio);
     youtubeAudioOptions.classList.toggle('hidden', !isAudio);
-  }
-  youtubeDownloadRadios.forEach(radio => radio.addEventListener('change', toggleYoutubeAudio));
-  toggleYoutubeAudio();
+  }));
 
-  const facebookDownloadRadios = document.querySelectorAll('input[name="downloadTypeFacebook"]');
+  // Facebook
+  const facebookVideoOptions = document.getElementById('facebookVideoOptions');
   const facebookAudioOptions = document.getElementById('facebookAudioOptions');
-  function toggleFacebookAudio() {
+  const facebookRadios = document.querySelectorAll('input[name="downloadTypeFacebook"]');
+  facebookRadios.forEach(r => r.addEventListener('change', () => {
     const isAudio = document.querySelector('input[name="downloadTypeFacebook"]:checked').value === 'audio';
+    facebookVideoOptions.classList.toggle('hidden', isAudio);
     facebookAudioOptions.classList.toggle('hidden', !isAudio);
-  }
-  facebookDownloadRadios.forEach(radio => radio.addEventListener('change', toggleFacebookAudio));
-  toggleFacebookAudio();
+  }));
 
-  const tiktokDownloadRadios = document.querySelectorAll('input[name="downloadTypeTikTok"]');
+  // TikTok
+  const tiktokVideoOptions = document.getElementById('tiktokVideoOptions');
   const tiktokAudioOptions = document.getElementById('tiktokAudioOptions');
-  function toggleTikTokAudio() {
+  const tiktokRadios = document.querySelectorAll('input[name="downloadTypeTikTok"]');
+  tiktokRadios.forEach(r => r.addEventListener('change', () => {
     const isAudio = document.querySelector('input[name="downloadTypeTikTok"]:checked').value === 'audio';
+    tiktokVideoOptions.classList.toggle('hidden', isAudio);
     tiktokAudioOptions.classList.toggle('hidden', !isAudio);
-  }
-  tiktokDownloadRadios.forEach(radio => radio.addEventListener('change', toggleTikTokAudio));
-  toggleTikTokAudio();
+  }));
 
   const tiktokBatchCheckbox = document.getElementById('tiktokBatchMode');
   const tiktokBatchOptions = document.getElementById('tiktokBatchOptions');
@@ -409,7 +469,7 @@ INDEX_HTML = """
   };
 
   btnDownload.onclick = async () => {
-    let url, quality, iphone, downloadType, audioFormat, audioBitrate, playlistMode, convertForIphone, batchMode, limit;
+    let url, quality, iphone, downloadType, audioFormat, audioBitrate, playlistMode, convertForIphone, batchMode, limit, videoFormat;
     
     if (currentTab === 'youtube') {
       url = document.getElementById('urlYoutube').value.trim();
@@ -422,6 +482,7 @@ INDEX_HTML = """
       convertForIphone = false;
       batchMode = false;
       limit = 0;
+      videoFormat = document.getElementById('videoFormatYoutube').value;
     } else if (currentTab === 'facebook') {
       url = document.getElementById('urlFacebook').value.trim();
       quality = document.getElementById('qualityFacebook').value;
@@ -433,6 +494,7 @@ INDEX_HTML = """
       convertForIphone = document.getElementById('facebookConvertForIphone').checked;
       batchMode = false;
       limit = 0;
+      videoFormat = document.getElementById('videoFormatFacebook').value;
     } else {
       url = document.getElementById('urlTikTok').value.trim();
       quality = document.getElementById('qualityTikTok').value;
@@ -444,6 +506,7 @@ INDEX_HTML = """
       convertForIphone = iphone;
       batchMode = document.getElementById('tiktokBatchMode').checked;
       limit = parseInt(document.getElementById('tiktokLimit').value) || 10;
+      videoFormat = document.getElementById('videoFormatTikTok').value;
     }
 
     if (!url) return alert('🔗 Nhập URL đi bro');
@@ -465,7 +528,8 @@ INDEX_HTML = """
           url, quality, iphone_compatible: iphone, download_type: downloadType,
           audio_format: audioFormat, audio_bitrate: audioBitrate,
           playlist_mode: playlistMode, convert_for_iphone: convertForIphone,
-          batch_mode: batchMode, limit: limit, platform: currentTab
+          batch_mode: batchMode, limit: limit, platform: currentTab,
+          video_format: videoFormat
         })
       });
 
@@ -566,6 +630,7 @@ def background_cleaner():
 threading.Thread(target=background_cleaner, daemon=True).start()
 
 def convert_for_iphone(input_path: Path, output_path: Path) -> bool:
+    """Chuyển đổi video sang H.264 + AAC cho iPhone."""
     try:
         subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
         cmd = [
@@ -578,24 +643,52 @@ def convert_for_iphone(input_path: Path, output_path: Path) -> bool:
     except:
         return False
 
+def convert_video_container(input_path: Path, output_path: Path, target_format: str) -> bool:
+    """
+    Chuyển đổi container video sang định dạng mong muốn (mp4, webm, mkv, avi, mov, flv).
+    Ưu tiên copy stream, nếu thất bại thì re-encode với codec phù hợp.
+    """
+    try:
+        # Thử copy stream trước
+        cmd_copy = ['ffmpeg', '-i', str(input_path), '-c', 'copy', '-y', str(output_path)]
+        result = subprocess.run(cmd_copy, capture_output=True, timeout=120)
+        if result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+            return True
+        
+        # Nếu copy thất bại, re-encode với codec thích hợp
+        if target_format == 'webm':
+            vcodec = 'libvpx-vp9'
+            acodec = 'libopus'
+        else:
+            vcodec = 'libx264'
+            acodec = 'aac'
+        
+        cmd_reencode = [
+            'ffmpeg', '-i', str(input_path),
+            '-c:v', vcodec, '-c:a', acodec,
+            '-y', str(output_path)
+        ]
+        subprocess.run(cmd_reencode, check=True, capture_output=True, timeout=300)
+        return output_path.exists()
+    except Exception as e:
+        print(f"Lỗi convert container: {e}")
+        return False
+
 def download_with_unique_id(url: str, ydl_opts: dict) -> Path:
     """
     Tải video/audio bằng yt-dlp với tên file tạm dạng uuid.%(ext)s.
-    Trả về Path của file đã tải (sau khi postprocess).
+    Trả về Path của file đã tải.
     """
     unique_id = uuid.uuid4().hex
-    # Đặt outtmpl để yt-dlp ghi file vào TMP_DIR với tên unique_id và extension placeholder
     ydl_opts['outtmpl'] = str(TMP_DIR / f"{unique_id}.%(ext)s")
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
     
-    # Tìm file có chứa unique_id (có thể có thêm .temp, .part, nhưng cuối cùng sẽ có đúng tên)
     candidates = list(TMP_DIR.glob(f"{unique_id}.*"))
     if not candidates:
         candidates = list(TMP_DIR.glob(f"{unique_id}*"))
     if not candidates:
         raise Exception(f"Không tìm thấy file đã tải cho ID {unique_id}")
-    # Ưu tiên file có kích thước > 0
     for f in candidates:
         if f.stat().st_size > 0:
             return f
@@ -624,7 +717,7 @@ class SingleProgressHook:
                 else:
                     speed_str = f'{speed:.0f} B/s'
             filename = d.get('filename', '')
-            is_audio_file = any(x in filename.lower() for x in ['.m4a', '.webm', '.aac', '.mp3', '.ogg', '.flac'])
+            is_audio_file = any(x in filename.lower() for x in ['.m4a', '.webm', '.aac', '.mp3', '.ogg', '.flac', '.wav', '.opus'])
             if self.is_audio or is_audio_file:
                 task['audio_progress'] = percent
             else:
@@ -635,10 +728,11 @@ class SingleProgressHook:
         elif d['status'] == 'processing':
             task['merge_progress'] = min(100, task.get('merge_progress', 0) + 10)
 
-# ------------------ Hàm tải đơn (sửa lỗi chính) ------------------
+# ------------------ Hàm tải đơn ------------------
 def download_single(task_id: str, url: str, quality: str, iphone_compatible: bool,
                     download_type: str, audio_format: str, audio_bitrate: int,
-                    convert_for_iphone_flag: bool = False, platform: str = 'youtube'):
+                    convert_for_iphone_flag: bool = False, platform: str = 'youtube',
+                    video_format: str = 'mp4'):
     try:
         task = _tasks[task_id]
         task['status'] = 'downloading'
@@ -659,12 +753,15 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
 
         # Xác định tên file cuối cùng
         if is_audio:
-            final_filename = f"{base_name}_audio.{audio_format}"
+            final_ext = audio_format
+            final_filename = f"{base_name}_audio.{final_ext}"
         else:
-            if (is_facebook or is_tiktok) and convert_for_iphone_flag:
-                final_filename = f"{base_name}_{quality}_iphone.mp4"
+            # Nếu iPhone mode, luôn dùng mp4
+            if (iphone_compatible and platform == 'youtube') or convert_for_iphone_flag:
+                final_ext = 'mp4'
             else:
-                final_filename = f"{base_name}_{quality}.mp4"
+                final_ext = video_format
+            final_filename = f"{base_name}_{quality}.{final_ext}"
         final_path = TMP_DIR / final_filename
 
         # Nếu file đã tồn tại thì trả về luôn
@@ -686,26 +783,26 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
         }
 
         if is_audio:
-            # Tải audio: ưu tiên bestaudio, chuyển đổi sang định dạng mong muốn
             ydl_opts['format'] = 'bestaudio/best'
-            ydl_opts['postprocessors'] = [{
+            postprocessor_opts = {
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': audio_format,
-                'preferredquality': str(audio_bitrate),
-            }]
+            }
+            # Xử lý bitrate cho lossless
+            if audio_format in ('flac', 'wav', 'alac'):
+                postprocessor_opts['preferredquality'] = '0'  # lossless
+            else:
+                postprocessor_opts['preferredquality'] = str(audio_bitrate)
+            ydl_opts['postprocessors'] = [postprocessor_opts]
             temp_file = download_with_unique_id(url, ydl_opts)
-            # Đổi tên về tên cuối cùng
             temp_file.rename(final_path)
         else:
-            # Tải video: không ép định dạng cứng (trừ trường hợp đặc biệt)
+            # Tải video
             if is_facebook:
-                # Facebook: lấy best video có sẵn (thường là mp4)
                 fmt = "best"
             elif is_tiktok:
-                # TikTok: lấy best video mp4 + audio
                 fmt = "bestvideo[ext=mp4]+bestaudio/best"
             else:
-                # YouTube: dùng format theo quality yêu cầu
                 format_map = {
                     "360p": "bestvideo[height<=360]+bestaudio/best",
                     "720p": "bestvideo[height<=720]+bestaudio/best",
@@ -714,28 +811,34 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
                     "2160p": "bestvideo[height<=2160]+bestaudio/best",
                 }
                 fmt = format_map.get(quality, "bestvideo+bestaudio/best")
-                if iphone_compatible and platform == 'youtube':
-                    # Ưu tiên H.264 + AAC
+                if iphone_compatible:
                     fmt = f"bestvideo[height<={quality[:-1]}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[ext=mp4][vcodec^=avc1]"
             ydl_opts['format'] = fmt
-            ydl_opts['merge_output_format'] = 'mp4'
+            ydl_opts['merge_output_format'] = 'mp4'  # tạm thời luôn merge ra mp4 để dễ xử lý
             ydl_opts['noplaylist'] = True
 
-            # Tải video
             temp_file = download_with_unique_id(url, ydl_opts)
             task['merge_progress'] = 70
 
-            # Nếu cần chuyển đổi cho iPhone (Facebook/TikTok)
-            if (is_facebook or is_tiktok) and convert_for_iphone_flag:
+            # Xử lý chuyển đổi container hoặc iPhone
+            if (iphone_compatible and platform == 'youtube') or (convert_for_iphone_flag and (is_facebook or is_tiktok)):
                 task['merge_progress'] = 80
                 if convert_for_iphone(temp_file, final_path):
                     temp_file.unlink()
                 else:
-                    # Convert thất bại: rename file gốc thành file đích
                     temp_file.rename(final_path)
             else:
-                # Không convert: rename thẳng
-                temp_file.rename(final_path)
+                if final_ext != temp_file.suffix[1:]:  # so sánh đuôi
+                    task['merge_progress'] = 80
+                    success = convert_video_container(temp_file, final_path, final_ext)
+                    if success:
+                        temp_file.unlink()
+                    else:
+                        # nếu không convert được thì dùng file gốc với tên mới (giữ nguyên container gốc)
+                        final_path = temp_file.with_suffix(temp_file.suffix)
+                        temp_file.rename(final_path)
+                else:
+                    temp_file.rename(final_path)
 
         # Cập nhật task
         task['status'] = 'completed'
@@ -751,9 +854,10 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
         _tasks[task_id]['status'] = 'error'
         _tasks[task_id]['error'] = str(e)
 
-# ------------------ Các hàm tải playlist và batch (giữ nguyên, đã hoạt động) ------------------
+# ------------------ Các hàm tải playlist và batch ------------------
 def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: bool,
-                      download_type: str, audio_format: str, audio_bitrate: int):
+                      download_type: str, audio_format: str, audio_bitrate: int,
+                      video_format: str = 'mp4'):
     try:
         task = _tasks[task_id]
         task['status'] = 'downloading'
@@ -789,12 +893,10 @@ def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: b
                         'postprocessors': [{
                             'key': 'FFmpegExtractAudio',
                             'preferredcodec': audio_format,
-                            'preferredquality': str(audio_bitrate),
+                            'preferredquality': '0' if audio_format in ('flac', 'wav') else str(audio_bitrate),
                         }],
                     })
                     arcname = f"{video_title}.{audio_format}"
-                    zipf.write(temp_file, arcname)
-                    temp_file.unlink()
                 else:
                     fmt = f"bestvideo[height<={quality[:-1]}]+bestaudio/best" if quality != "2160p" else "bestvideo+bestaudio/best"
                     if iphone_compatible:
@@ -806,9 +908,16 @@ def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: b
                         'merge_output_format': 'mp4',
                         'noplaylist': True,
                     })
-                    arcname = f"{video_title}.mp4"
-                    zipf.write(temp_file, arcname)
-                    temp_file.unlink()
+                    # Convert container nếu cần
+                    if video_format != 'mp4' and not iphone_compatible:
+                        converted_path = TMP_DIR / f"{uuid.uuid4().hex}.{video_format}"
+                        if convert_video_container(temp_file, converted_path, video_format):
+                            temp_file.unlink()
+                            temp_file = converted_path
+                    arcname = f"{video_title}.{video_format if not iphone_compatible else 'mp4'}"
+
+                zipf.write(temp_file, arcname)
+                temp_file.unlink()
 
                 task['processed'] = idx
                 task['overall_progress'] = idx / total * 100
@@ -821,7 +930,7 @@ def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: b
         _tasks[task_id]['status'] = 'error'
         _tasks[task_id]['error'] = str(e)
 
-def download_tiktok_batch(task_id: str, url: str, download_type: str, audio_format: str, audio_bitrate: int, limit: int):
+def download_tiktok_batch(task_id: str, url: str, download_type: str, audio_format: str, audio_bitrate: int, limit: int, video_format: str = 'mp4'):
     try:
         task = _tasks[task_id]
         task['status'] = 'downloading'
@@ -854,12 +963,10 @@ def download_tiktok_batch(task_id: str, url: str, download_type: str, audio_form
                         'postprocessors': [{
                             'key': 'FFmpegExtractAudio',
                             'preferredcodec': audio_format,
-                            'preferredquality': str(audio_bitrate),
+                            'preferredquality': '0' if audio_format in ('flac', 'wav') else str(audio_bitrate),
                         }],
                     })
                     arcname = f"{video_title}.{audio_format}"
-                    zipf.write(temp_file, arcname)
-                    temp_file.unlink()
                 else:
                     temp_file = download_with_unique_id(video_url, {
                         'quiet': True,
@@ -867,9 +974,15 @@ def download_tiktok_batch(task_id: str, url: str, download_type: str, audio_form
                         'format': 'bestvideo[ext=mp4]+bestaudio/best',
                         'merge_output_format': 'mp4',
                     })
-                    arcname = f"{video_title}.mp4"
-                    zipf.write(temp_file, arcname)
-                    temp_file.unlink()
+                    if video_format != 'mp4':
+                        converted_path = TMP_DIR / f"{uuid.uuid4().hex}.{video_format}"
+                        if convert_video_container(temp_file, converted_path, video_format):
+                            temp_file.unlink()
+                            temp_file = converted_path
+                    arcname = f"{video_title}.{video_format}"
+
+                zipf.write(temp_file, arcname)
+                temp_file.unlink()
 
                 task['overall_progress'] = idx / total * 100
 
@@ -900,6 +1013,7 @@ def download():
     batch_mode = data.get("batch_mode", False)
     limit = data.get("limit", 10)
     platform = data.get("platform", "youtube")
+    video_format = data.get("video_format", "mp4")
 
     if not url:
         return "Missing url", 400
@@ -922,7 +1036,7 @@ def download():
             'overall_progress': 0, 'detail': '',
             'file': None, 'filename': None, 'error': None
         }
-        thread = threading.Thread(target=download_tiktok_batch, args=(task_id, url, download_type, audio_format, audio_bitrate, limit))
+        thread = threading.Thread(target=download_tiktok_batch, args=(task_id, url, download_type, audio_format, audio_bitrate, limit, video_format))
     elif playlist_mode:
         _tasks[task_id] = {
             'status': 'pending', 'type': 'playlist',
@@ -930,7 +1044,7 @@ def download():
             'file': None, 'filename': None, 'error': None
         }
         thread = threading.Thread(target=download_playlist, args=(task_id, url, quality, iphone_compatible,
-                                                                   download_type, audio_format, audio_bitrate))
+                                                                   download_type, audio_format, audio_bitrate, video_format))
     else:
         _tasks[task_id] = {
             'status': 'pending', 'type': 'single',
@@ -939,7 +1053,7 @@ def download():
         }
         thread = threading.Thread(target=download_single, args=(task_id, url, quality, iphone_compatible,
                                                                 download_type, audio_format, audio_bitrate,
-                                                                convert_for_iphone_flag, platform))
+                                                                convert_for_iphone_flag, platform, video_format))
     thread.daemon = True
     thread.start()
 
