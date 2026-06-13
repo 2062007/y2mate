@@ -30,7 +30,7 @@ app = Flask(__name__)
 
 _tasks: Dict[str, Dict[str, Any]] = {}
 
-# ------------------ HTML (giữ nguyên giao diện) ------------------
+# ------------------ HTML (giữ nguyên) ------------------
 INDEX_HTML = """
 <!doctype html>
 <html>
@@ -643,39 +643,68 @@ def convert_for_iphone(input_path: Path, output_path: Path) -> bool:
     except:
         return False
 
+# ================== HÀM CHUYỂN ĐỔI CONTAINER ĐÃ ĐƯỢC FIX ==================
 def convert_video_container(input_path: Path, output_path: Path, target_format: str) -> bool:
     """
     Chuyển đổi container video sang định dạng mong muốn bằng ffmpeg.
     Hỗ trợ mp4, webm, mkv, avi, mov, flv.
+    Đã fix lỗi exit status 8 cho AVI và MOV.
     """
     try:
-        # Thử copy stream trước
+        # Thử copy stream trước (nhanh nhất, chỉ thay đổi container)
         cmd_copy = ['ffmpeg', '-i', str(input_path), '-c', 'copy', '-y', str(output_path)]
         result = subprocess.run(cmd_copy, capture_output=True, timeout=120)
         if result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
             return True
 
-        # Nếu copy thất bại, re-encode với codec thích hợp
+        # Nếu copy thất bại, re-encode với codec và tham số phù hợp cho từng định dạng
         if target_format == 'webm':
             vcodec = 'libvpx-vp9'
             acodec = 'libopus'
+            extra_args = ['-crf', '30', '-b:v', '0']
         elif target_format == 'flv':
             vcodec = 'flv1'
             acodec = 'mp3'
-        else:  # mp4, mkv, avi, mov, ...
+            extra_args = ['-ar', '44100', '-b:a', '128k']
+        elif target_format == 'mov':
+            # MOV yêu cầu codec chuẩn, faststart và pixel format yuv420p
             vcodec = 'libx264'
             acodec = 'aac'
+            extra_args = ['-movflags', '+faststart', '-pix_fmt', 'yuv420p', '-profile:v', 'high', '-level', '4.0']
+        elif target_format == 'avi':
+            # AVI thường dùng PCM audio, nếu không thì dùng libmp3lame
+            vcodec = 'libx264'
+            acodec = 'pcm_s16le'   # PCM 16-bit (an toàn, không lỗi)
+            extra_args = ['-pix_fmt', 'yuv420p']
+        else:  # mp4, mkv, ...
+            vcodec = 'libx264'
+            acodec = 'aac'
+            extra_args = ['-pix_fmt', 'yuv420p']
+            if target_format == 'mp4':
+                extra_args.append('-movflags')
+                extra_args.append('+faststart')
 
         cmd_reencode = [
             'ffmpeg', '-i', str(input_path),
             '-c:v', vcodec, '-c:a', acodec,
+            *extra_args,
             '-y', str(output_path)
         ]
+        print(f"🔄 Re-encode: {' '.join(cmd_reencode)}")
         subprocess.run(cmd_reencode, check=True, capture_output=True, timeout=300)
-        return output_path.exists()
-    except Exception as e:
-        print(f"Lỗi convert container: {e}")
+        return output_path.exists() and output_path.stat().st_size > 0
+
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Lỗi convert container (exit code {e.returncode}):")
+        if e.stderr:
+            print(e.stderr.decode())
+        else:
+            print("Không có stderr chi tiết")
         return False
+    except Exception as e:
+        print(f"❌ Lỗi convert container: {e}")
+        return False
+# ========================================================================
 
 def download_with_unique_id(url: str, ydl_opts: dict) -> Path:
     """
@@ -731,7 +760,7 @@ class SingleProgressHook:
         elif d['status'] == 'processing':
             task['merge_progress'] = min(100, task.get('merge_progress', 0) + 10)
 
-# ------------------ Hàm tải đơn (đã sửa lỗi flv & avi/mov) ------------------
+# ------------------ Hàm tải đơn ------------------
 def download_single(task_id: str, url: str, quality: str, iphone_compatible: bool,
                     download_type: str, audio_format: str, audio_bitrate: int,
                     convert_for_iphone_flag: bool = False, platform: str = 'youtube',
@@ -759,7 +788,6 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
             final_ext = audio_format
             final_filename = f"{base_name}_audio.{final_ext}"
         else:
-            # Nếu iPhone mode hoặc Facebook convert, luôn dùng mp4
             if (iphone_compatible and platform == 'youtube') or convert_for_iphone_flag:
                 final_ext = 'mp4'
             else:
@@ -767,7 +795,6 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
             final_filename = f"{base_name}_{quality}.{final_ext}"
         final_path = TMP_DIR / final_filename
 
-        # Nếu file đã tồn tại thì trả về luôn
         if final_path.exists():
             task['status'] = 'completed'
             task['file'] = f"/file/{final_filename}"
@@ -785,11 +812,9 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
             'concurrent_fragment_downloads': CONCURRENT_FRAGMENTS,
         }
 
-        # Danh sách container mà yt-dlp có thể merge ổn định (không gây lỗi index out of range)
         SAFE_MERGE_CONTAINERS = ['mp4', 'mkv', 'webm']
         
         if is_audio:
-            # Audio: dùng postprocessor để extract audio đúng codec
             ydl_opts['format'] = 'bestaudio/best'
             postprocessor_opts = {
                 'key': 'FFmpegExtractAudio',
@@ -803,8 +828,6 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
             temp_file = download_with_unique_id(url, ydl_opts)
             temp_file.rename(final_path)
         else:
-            # Video
-            # Chọn format dựa trên platform
             if is_facebook:
                 fmt = "best"
             elif is_tiktok:
@@ -824,55 +847,41 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
             ydl_opts['format'] = fmt
             ydl_opts['noplaylist'] = True
 
-            # Quyết định merge_output_format
             if iphone_compatible or convert_for_iphone_flag:
-                # Bắt buộc phải có mp4 để chuyển đổi iPhone sau
                 ydl_opts['merge_output_format'] = 'mp4'
             else:
                 if video_format in SAFE_MERGE_CONTAINERS:
-                    # Yêu cầu định dạng nằm trong danh sách an toàn -> merge trực tiếp
                     ydl_opts['merge_output_format'] = video_format
                 else:
-                    # Các định dạng không an toàn (avi, mov, flv, ...) -> tải mp4 trước, sau đó convert
                     ydl_opts['merge_output_format'] = 'mp4'
 
             temp_file = download_with_unique_id(url, ydl_opts)
             task['merge_progress'] = 70
 
-            # Xử lý chuyển đổi sau tải nếu cần
             if iphone_compatible or convert_for_iphone_flag:
-                # Convert sang chuẩn iPhone
                 task['merge_progress'] = 80
                 if convert_for_iphone(temp_file, final_path):
                     temp_file.unlink()
                 else:
-                    # Fallback: giữ nguyên file mp4
                     temp_file.rename(final_path)
             else:
-                # Kiểm tra xem có cần chuyển đổi container không
                 if video_format in SAFE_MERGE_CONTAINERS and temp_file.suffix == f'.{video_format}':
-                    # Trùng container an toàn, chỉ rename
                     temp_file.rename(final_path)
                 else:
-                    # Cần chuyển đổi container (ví dụ avi, mov, flv hoặc yêu cầu format không khớp)
                     task['merge_progress'] = 80
                     success = convert_video_container(temp_file, final_path, video_format)
                     if success:
                         temp_file.unlink()
                     else:
-                        # Fallback: giữ nguyên container gốc nhưng đổi tên theo yêu cầu (cảnh báo)
                         print(f"⚠ Không thể chuyển đổi sang {video_format}, giữ nguyên container gốc")
-                        # Đổi tên file tạm thành tên cuối cùng nhưng giữ nguyên phần mở rộng thực tế
                         actual_ext = temp_file.suffix[1:] if temp_file.suffix else 'mp4'
                         fallback_name = f"{base_name}_{quality}.{actual_ext}"
                         fallback_path = TMP_DIR / fallback_name
                         temp_file.rename(fallback_path)
                         final_path = fallback_path
-                        # Cập nhật lại đường dẫn trong task
                         task['file'] = f"/file/{fallback_path.name}"
                         task['filename'] = fallback_path.name
 
-        # Cập nhật task
         task['status'] = 'completed'
         task['file'] = f"/file/{final_path.name}"
         task['filename'] = final_path.name
@@ -886,7 +895,7 @@ def download_single(task_id: str, url: str, quality: str, iphone_compatible: boo
         _tasks[task_id]['status'] = 'error'
         _tasks[task_id]['error'] = str(e)
 
-# ------------------ Các hàm tải playlist và batch (cập nhật tương tự) ------------------
+# ------------------ Playlist & TikTok batch (giữ nguyên logic, đã sử dụng convert_video_container mới) ------------------
 def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: bool,
                       download_type: str, audio_format: str, audio_bitrate: int,
                       video_format: str = 'mp4'):
@@ -935,7 +944,6 @@ def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: b
                     if iphone_compatible:
                         fmt = f"bestvideo[height<={quality[:-1]}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[ext=mp4]"
 
-                    # Quyết định merge container
                     if iphone_compatible:
                         merge_container = 'mp4'
                     else:
@@ -949,14 +957,12 @@ def download_playlist(task_id: str, url: str, quality: str, iphone_compatible: b
                         'noplaylist': True,
                     })
 
-                    # Chuyển đổi container nếu cần (khi yêu cầu format không an toàn)
                     if not iphone_compatible and video_format not in SAFE_MERGE_CONTAINERS:
                         converted_path = TMP_DIR / f"{uuid.uuid4().hex}.{video_format}"
                         if convert_video_container(temp_file, converted_path, video_format):
                             temp_file.unlink()
                             temp_file = converted_path
                         else:
-                            # Fallback: giữ nguyên container gốc, thay đổi arcname
                             actual_ext = temp_file.suffix[1:] if temp_file.suffix else 'mp4'
                             arcname = f"{video_title}.{actual_ext}"
                             zipf.write(temp_file, arcname)
@@ -1019,7 +1025,6 @@ def download_tiktok_batch(task_id: str, url: str, download_type: str, audio_form
                     })
                     arcname = f"{video_title}.{audio_format}"
                 else:
-                    # TikTok batch: tải mp4 trước
                     temp_file = download_with_unique_id(video_url, {
                         'quiet': True,
                         'no_warnings': True,
